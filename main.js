@@ -617,6 +617,16 @@ document.addEventListener('DOMContentLoaded', () => {
             assignments: {}
         };
 
+        // 同步在頁籤一「美術組工作分配表」建立同名的空白列，
+        // 避免每次開新專案要分別在兩個頁籤各新增一次。如果分配表裡已經有同名的列(例如反過來，
+        // 先在分配表建立了專案，才來這裡建工時試算)，就不重複新增。
+        const alreadyInAssignSheet = assignmentSheet.rows.some(r => (r.projectName || '').trim() === trimmedName);
+        if (!alreadyInAssignSheet) {
+            const newRow = makeBlankRow();
+            newRow.projectName = trimmedName;
+            assignmentSheet.rows.push(newRow);
+        }
+
         currentProjectName = trimmedName;
         categorySelect.value = 'ALL';
         saveData();
@@ -638,6 +648,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         allProjects[trimmedName] = allProjects[currentProjectName];
         delete allProjects[currentProjectName];
+
+        // 同步更新頁籤一「美術組工作分配表」裡同名的列，讓兩邊的專案名稱保持一致
+        // (理論上專案名稱不會重複，但為了保險，符合的列全部一起改名)
+        assignmentSheet.rows.forEach(r => {
+            if ((r.projectName || '').trim() === currentProjectName) {
+                r.projectName = trimmedName;
+            }
+        });
+
         currentProjectName = trimmedName;
         categorySelect.value = 'ALL';
         saveData();
@@ -646,7 +665,10 @@ document.addEventListener('DOMContentLoaded', () => {
     deleteProjectBtn.addEventListener('click', () => {
         if (!allProjects[currentProjectName]) return;
 
-        if (!confirm(`確定要刪除專案「${currentProjectName}」嗎？這個專案的工時試算資料會一併刪除，且無法復原。`)) return;
+        // 注意：這裡故意不自動刪除頁籤一「美術組工作分配表」裡同名的列，
+        // 因為那一列除了專案名稱以外，通常還有上線日期、企劃、每個人的任務分配等資料，
+        // 直接連動刪除風險較高(誤刪就救不回來)，所以只在確認訊息裡提醒使用者，交由使用者自行決定是否要手動刪除。
+        if (!confirm(`確定要刪除專案「${currentProjectName}」嗎？這個專案的工時試算資料會一併刪除，且無法復原。\n\n(提醒：「美術組工作分配表」裡同名的那一列不會被自動刪除，如果也不需要了，請自行到那邊手動刪除)`)) return;
 
         delete allProjects[currentProjectName];
 
