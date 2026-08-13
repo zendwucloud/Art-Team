@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>美術組多功能平台</title>
+    <!--
+      這個 script 只有在部署到「沒辦法自訂 HTTP 標頭」的靜態空間(例如 GitHub Pages)時才需要，
+      作用是用 Service Worker 補上影片壓縮工具需要的 COOP/COEP 標頭。
+      本機用 node server.js 開的話，這個 script 不會做任何事，不影響其他功能，留著沒關係。
+    -->
+    <script src="./coi-serviceworker.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background-color: #f9f9f9; }
+        .container { max-width: 96%; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        select, input[type="number"], input[type="text"], button, textarea { padding: 8px; font-size: 14px; font-family: inherit; }
+
+        /* 頁籤 */
+        .tab-bar { display: flex; gap: 6px; margin-bottom: 18px; border-bottom: 2px solid #ddd; }
+        .tab-btn {
+            padding: 10px 22px; border: none; background: #eee; cursor: pointer;
+            font-size: 15px; font-weight: bold; border-radius: 6px 6px 0 0; color: #666;
+        }
+        .tab-btn.active { background: #4a6fa5; color: white; }
+        .tab-page { display: none; }
+        .tab-page.active { display: block; }
+
+        .control-bar { display: flex; gap: 15px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; background: #f1f1f1; padding: 15px; border-radius: 6px; }
+        .control-group { display: flex; flex-direction: column; gap: 5px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; vertical-align: middle; font-size: 13px; }
+        th { background-color: #f4f4f4; }
+
+        .summary-container { margin-bottom: 20px; padding: 15px; background-color: #eef2f7; border-radius: 6px; }
+        #personnelSummary { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+        .person-badge { padding: 10px 15px; border-radius: 4px; border: 1px solid #ccc; min-width: 80px; text-align: center; font-size: 14px; }
+
+        .assign-select { width: 100%; min-height: 70px; }
+        .qty-input { width: 60px; text-align: center; }
+        .multiplier-select { width: 100%; }
+        .assignee-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+        .assignee-tag { background: #fff; border: 1px solid #bbb; border-radius: 10px; padding: 2px 8px; font-size: 12px; white-space: nowrap; }
+        .assignee-empty { color: #999; font-size: 12px; font-style: italic; }
+        .help-text { font-size: 12px; color: #666; display: block; margin-top: 4px; }
+        .btn-primary { background-color: #2c662d; color: white; border: none; border-radius: 4px; cursor: pointer; padding: 8px 16px; font-weight: bold; }
+        .btn-primary:hover { background-color: #234e24; }
+        .btn-secondary { background-color: #4a6fa5; color: white; border: none; border-radius: 4px; cursor: pointer; padding: 8px 16px; font-weight: bold; }
+        .btn-secondary:hover { background-color: #385780; }
+        .btn-danger { background: none; border: none; color: #c00; cursor: pointer; font-size: 16px; font-weight: bold; }
+        .btn-danger-solid { background-color: #c0392b; color: white; border: none; border-radius: 4px; cursor: pointer; padding: 8px 16px; font-weight: bold; }
+        .btn-danger-solid:hover { background-color: #992d22; }
+
+        /* 頁籤一：專案人員分配表 (比照 Excel 的緊湊列高/欄寬) */
+        #assignTable { table-layout: auto; }
+        #assignTable th, #assignTable td { white-space: nowrap; padding: 2px 4px; font-size: 14px; line-height: 1.2; }
+        #assignTable th.person-active { background-color: #FFE599; min-width: 60px; }
+        #assignTable th.person-inactive { background-color: #D9D9D9; color: #666; min-width: 60px; }
+        #assignTable td.col-project { background-color: #C9DAF8; font-weight: bold; white-space: nowrap; min-width: 140px; }
+        #assignTable td.col-date { background-color: #C9DAF8; min-width: 70px; }
+        #assignTable td.col-planner { background-color: #9FC5E9; min-width: 60px; }
+        #assignTable td.cell-role { min-width: 60px; }
+        #assignTable input[type="text"] {
+            border: 1px solid transparent; background: transparent; box-sizing: border-box;
+            font-size: 14px; padding: 0px 2px; height: 100%; width: 100%;
+        }
+        #assignTable input[type="text"]:hover, #assignTable input[type="text"]:focus { border: 1px solid #999; background: white; }
+        #assignTable td.cell-role input { text-align: center; font-weight: bold; }
+        #assignTable td.col-project input { font-weight: bold; }
+        .assign-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+        #importPanel { display: none; margin-bottom: 15px; padding: 15px; background: #f1f1f1; border-radius: 6px; }
+        #importPanel textarea { width: 100%; height: 140px; box-sizing: border-box; font-family: monospace; font-size: 12px; }
+        #importPanel .help-text { margin-bottom: 8px; }
+        #importPanelEstimate { display: none; margin: 12px 0; padding: 15px; background: #f1f1f1; border-radius: 6px; }
+        #importPanelEstimate textarea { width: 100%; height: 120px; box-sizing: border-box; font-family: monospace; font-size: 12px; }
+        #importPanelEstimate .help-text { margin-bottom: 8px; }
+        .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
+        .legend span.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 5px; vertical-align: middle; border: 1px solid #bbb; }
+        .platform-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; }
+
+        /* 表格捲動容器：橫向拉桿固定在這個容器底部，不用捲到整個頁面最下面 */
+        .table-scroll { max-height: 66vh; overflow: auto; border: 1px solid #ddd; border-radius: 4px; }
+        .table-scroll table { margin-top: 0; }
+        .table-scroll thead th { position: sticky; top: 0; z-index: 2; }
+        .table-scroll .section-labels th { position: sticky; top: 0; z-index: 3; }
+        .table-scroll thead tr:nth-child(2) th { top: 25px; }
+
+        /* 頁籤二：左半邊「基礎工時」參考區 vs 右半邊「本專案輸入」區 */
+        .col-base { background-color: #f5f6f8; }
+        th.col-base { background-color: #e3e5ea; }
+        .col-divider { border-left: 3px solid #4a6fa5 !important; }
+        .section-labels th { border-bottom: none; font-size: 12px; color: #555; padding: 4px 8px; background: #fff; }
+        .section-labels th.base-label { text-align: left; }
+        .section-labels th.input-label { text-align: left; border-left: 3px solid #4a6fa5; }
+        /* 頁籤三：美術組專案執行狀況 */
+        .person-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+        .person-btn {
+            padding: 8px 18px; border-radius: 20px; border: 2px solid #ccc; background: white;
+            cursor: pointer; font-size: 14px; font-weight: bold; color: #555;
+        }
+        .person-btn:hover { border-color: #4a6fa5; }
+        .person-btn.active { background: #4a6fa5; border-color: #4a6fa5; color: white; }
+        #statusTable td, #statusTable th { font-size: 13px; }
+        #statusTable select, #statusTable input[type="number"] { font-size: 13px; padding: 4px; }
+        #statusTable input[type="number"] { width: 70px; text-align: center; }
+
+        /* 頁籤四：圖片壓縮工具 */
+        #compressResults, #upscaleResults, #bgremoveResults { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 16px; }
+        .compress-card {
+            width: 220px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden;
+            background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+        .compress-card img { width: 100%; height: 130px; object-fit: contain; background: repeating-conic-gradient(#eee 0% 25%, #fff 0% 50%) 50% / 16px 16px; display: block; }
+        .compress-card .info { padding: 10px; font-size: 12px; }
+        .compress-card .info .fname { font-weight: bold; margin-bottom: 4px; word-break: break-all; font-size: 12px; }
+        .compress-card .info .size-row { color: #555; margin-bottom: 2px; }
+        .compress-card .info .saved { color: #2c662d; font-weight: bold; }
+        .compress-card .info .saved.warn { color: #c0392b; }
+        .compress-card .download-btn {
+            display: block; text-align: center; background: #2c662d; color: white; text-decoration: none;
+            padding: 8px; font-weight: bold; font-size: 13px;
+        }
+        .compress-card .download-btn:hover { background: #234e24; }
+        .compress-card .status-line { padding: 8px 10px; font-size: 12px; color: #999; text-align: center; }
+        .quality-row { display: flex; align-items: center; gap: 10px; }
+        .quality-row input[type="range"] { width: 180px; }
+        .dropzone {
+            border: 2px dashed #aaa; border-radius: 8px; padding: 28px 20px; text-align: center;
+            color: #777; font-size: 14px; font-weight: bold; cursor: pointer; margin-bottom: 16px;
+            background: #fafafa; transition: background 0.15s, border-color 0.15s;
+        }
+        .dropzone:hover { border-color: #4a6fa5; color: #4a6fa5; }
+        .dropzone.dragover { border-color: #2c662d; background: #eef7ee; color: #2c662d; }
+
+        /* 頁籤七：去背工具的「多物件模式」手動框選視窗 */
+        .bgremove-modal {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.68); z-index: 1000;
+            display: flex; align-items: center; justify-content: center; padding: 20px;
+        }
+        .bgremove-modal-inner {
+            background: white; border-radius: 8px; padding: 16px 18px; max-width: 96vw; max-height: 96vh;
+            display: flex; flex-direction: column; gap: 10px; box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+        }
+        .bgremove-modal-header { display: flex; flex-direction: column; gap: 4px; }
+        .bgremove-modal-header strong { font-size: 15px; }
+        .bgremove-modal-canvas-wrap {
+            overflow: auto; max-width: 90vw; max-height: 62vh; border: 1px solid #ccc; align-self: center;
+            background: repeating-conic-gradient(#eee 0% 25%, #fff 0% 50%) 50% / 16px 16px;
+        }
+        #bgremoveMultiCanvas { display: block; cursor: crosshair; touch-action: none; }
+        .bgremove-modal-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+        .bgremove-modal-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        /* 拖進來之後、還沒開始處理前的縮圖預覽列 */
+        .queue-preview { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 14px; }
+        .queue-thumb {
+            position: relative; width: 90px; border: 1px solid #ddd; border-radius: 6px;
+            overflow: hidden; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .queue-thumb img, .queue-thumb video {
+            width: 90px; height: 90px; object-fit: cover; display: block;
+            background: repeating-conic-gradient(#eee 0% 25%, #fff 0% 50%) 50% / 14px 14px;
+        }
+        .queue-thumb .queue-thumb-name {
+            font-size: 10px; color: #555; padding: 3px 4px; white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis;
+        }
+        .queue-thumb .queue-thumb-remove {
+            position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; line-height: 18px;
+            text-align: center; background: rgba(0,0,0,0.6); color: white; border: none; border-radius: 50%;
+            cursor: pointer; font-size: 11px; padding: 0;
+        }
+        .queue-thumb .queue-thumb-remove:hover { background: rgba(192,57,43,0.9); }
+
+        /* 頁籤五：影片壓縮工具 */
+        #videoResults { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 16px; }
+        .video-card {
+            width: 260px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden;
+            background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+        .video-card video { width: 100%; height: 150px; object-fit: contain; background: #000; display: block; }
+        .video-card .info { padding: 10px; font-size: 12px; }
+        .video-card .info .fname { font-weight: bold; margin-bottom: 4px; word-break: break-all; font-size: 12px; }
+        .video-card .info .size-row { color: #555; margin-bottom: 2px; }
+        .video-card .info .saved { color: #2c662d; font-weight: bold; }
+        .video-card .info .saved.warn { color: #c0392b; }
+        .video-card .download-btn {
+            display: block; text-align: center; background: #2c662d; color: white; text-decoration: none;
+            padding: 8px; font-weight: bold; font-size: 13px;
+        }
+        .video-card .download-btn:hover { background: #234e24; }
+        .video-card .status-line { padding: 10px; font-size: 12px; color: #666; text-align: center; }
+        .video-card .progress-bar-outer { height: 6px; background: #eee; border-radius: 3px; margin: 8px 10px 0; overflow: hidden; }
+        .video-card .progress-bar-inner { height: 100%; background: #4a6fa5; width: 0%; transition: width 0.2s; }
+
+        .diag-box { margin: 10px 0; padding: 10px 14px; background: #f1f1f1; border-radius: 6px; font-size: 12px; }
+        #videoDiagLine { font-weight: bold; margin-bottom: 4px; }
+        #videoDiagLine.ok { color: #2c662d; }
+        #videoDiagLine.bad { color: #c0392b; }
+        .diag-box summary { cursor: pointer; color: #4a6fa5; margin-top: 4px; }
+        #videoDebugLog {
+            margin-top: 8px; max-height: 200px; overflow-y: auto; background: #fff; border: 1px solid #ddd;
+            border-radius: 4px; padding: 8px; font-family: monospace; font-size: 11px; white-space: pre-wrap;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>美術組多功能平台</h2>
+
+        <div class="tab-bar">
+            <button class="tab-btn active" data-tab="assign">📋 美術組工作分配表</button>
+            <button class="tab-btn" data-tab="estimate">📊 美術組工時試算表</button>
+            <button class="tab-btn" data-tab="status">👤 美術組專案執行進度表</button>
+            <button class="tab-btn" data-tab="compress">🖼 圖片壓縮工具</button>
+            <button class="tab-btn" data-tab="videocompress">🎬 影片壓縮工具</button>
+            <button class="tab-btn" data-tab="upscale">🔍 AI 圖片放大工具</button>
+            <button class="tab-btn" data-tab="bgremove">✂️ AI 去背工具</button>
+        </div>
+
+        <!-- 頁籤一：專案人員分配表 -->
+        <div id="page-assign" class="tab-page active">
+            <div class="legend">
+                <span><span class="swatch" style="background:#FCE4D6"></span>前製設定</span>
+                <span><span class="swatch" style="background:#D9EAD3"></span>後製動畫</span>
+                <span><span class="swatch" style="background:#d2deff"></span>廣宣</span>
+                <span><span class="swatch" style="background:#D9D2E9"></span>其他/特殊</span>
+            </div>
+            <div class="legend platform-legend">
+                <span><span class="swatch" style="background:#C9DAF8"></span>YGR</span>
+                <span><span class="swatch" style="background:#D9D2E9"></span>POP</span>
+                <span><span class="swatch" style="background:#D0E0E3"></span>888</span>
+                <span><span class="swatch" style="background:#FCE5CD"></span>APEX</span>
+                <span><span class="swatch" style="background:#F4CCCC"></span>A+</span>
+                <span><span class="swatch" style="background:#E2E2E2"></span>其他</span>
+                <span class="help-text" style="margin:0;">(專案名稱欄依開頭關鍵字自動分色，並依名稱中的數字自動排序)</span>
+            </div>
+            <div class="assign-toolbar">
+                <button id="addRowBtn" class="btn-primary">+ 新增專案列</button>
+                <button id="toggleImportBtn" class="btn-secondary">📥 從 Excel 貼上匯入</button>
+            </div>
+            <div id="importPanel">
+                <span class="help-text">
+                    請從 Excel／Google Sheet 選取資料列後複製 (Ctrl+C)，直接貼在下方欄位。<br>
+                    每列欄位順序需為：專案名稱、上線日期、企劃、阿榮、可樂、大寶、溫仔、昱婷、安惠、中爺、寶哥、欣儀、逸筠、佩可、豆豆、嫌嫌、柳橙、無尾熊 (以 Tab 分隔)。
+                </span>
+                <textarea id="importText" placeholder="在這裡貼上從 Excel 複製的資料..."></textarea>
+                <div style="margin-top:8px; display:flex; gap:10px;">
+                    <button id="importConfirmBtn" class="btn-primary">匯入(附加到現有列表)</button>
+                    <button id="importCancelBtn" class="btn-secondary">取消</button>
+                </div>
+            </div>
+            <div class="table-scroll">
+                <table id="assignTable">
+                    <thead><tr id="assignTableHeader"></tr></thead>
+                    <tbody id="assignTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 頁籤二：工時試算表 -->
+        <div id="page-estimate" class="tab-page">
+            <div class="control-bar">
+                <div class="control-group">
+                    <label for="categorySelect"><strong>分類：</strong></label>
+                    <select id="categorySelect" style="min-width: 110px;"></select>
+                </div>
+                <div class="control-group">
+                    <label for="projectSelect"><strong>選擇專案：</strong></label>
+                    <select id="projectSelect" style="min-width: 220px;"></select>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="addProjectBtn" class="btn-primary">+ 新增專案</button>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="renameProjectBtn" class="btn-secondary">✏️ 重新命名</button>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="deleteProjectBtn" class="btn-danger-solid">🗑 刪除專案</button>
+                </div>
+                <div class="control-group" style="margin-left: auto;">
+                    <label for="discountSelect"><strong>本專案折數：</strong></label>
+                    <select id="discountSelect" style="min-width: 150px;"></select>
+                </div>
+            </div>
+
+            <div class="assign-toolbar">
+                <button id="toggleImportBtnEstimate" class="btn-secondary">📥 從 Excel 貼上匯入</button>
+                <button id="copyEstimateBtn" class="btn-secondary">📋 複製設定/動畫預估</button>
+                <button id="copyQtyBtn" class="btn-secondary">📋 複製數量</button>
+            </div>
+            <div id="importPanelEstimate">
+                <span class="help-text">
+                    請貼上「工項名稱」與「數量」兩欄資料(以 Tab 分隔)，會依工項名稱比對，自動帶入數量到目前選擇的專案「<span id="importTargetProjectName"></span>」。<br>
+                    例如：<code>Symbol_AKQJ10&nbsp;&nbsp;&nbsp;3</code>，工項名稱需與左側「工項名稱」欄一致才能對得上。
+                </span>
+                <textarea id="importTextEstimate" placeholder="工項名稱[Tab]數量，一列一筆"></textarea>
+                <div style="margin-top:8px; display:flex; gap:10px;">
+                    <button id="importConfirmBtnEstimate" class="btn-primary">匯入(套用到目前專案)</button>
+                    <button id="importCancelBtnEstimate" class="btn-secondary">取消</button>
+                </div>
+            </div>
+
+            <div class="table-scroll">
+            <table id="taskTable">
+                <thead>
+                    <tr class="section-labels">
+                        <th class="base-label" colspan="3">◀ 基礎工時 (依本專案折數對照)</th>
+                        <th class="input-label" colspan="4">本專案試算 ▶</th>
+                    </tr>
+                    <tr>
+                        <th class="col-base">工項名稱</th>
+                        <th class="col-base">設定基準 (天)</th>
+                        <th class="col-base">動畫基準 (天)</th>
+                        <th class="col-divider">數量</th>
+                        <th>設定預估 (天)</th>
+                        <th>動畫預估 (天)</th>
+                        <th>指派人員 (自動帶入)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+            </table>
+            </div>
+        </div>
+
+        <!-- 頁籤三：美術組專案執行狀況 -->
+        <div id="page-status" class="tab-page">
+            <div class="person-picker" id="personPicker"></div>
+
+            <div class="legend">
+                <span><span class="swatch" style="background:#FCE4D6"></span>準時(原色)</span>
+                <span><span class="swatch" style="background:#c99b6e"></span>警戒(同色系加深)</span>
+                <span><span class="swatch" style="background:#F87171"></span>超時</span>
+                <span><span class="swatch" style="background:#D9D2E9"></span>特殊(紫色)</span>
+                <span><span class="swatch" style="background:#BFBFBF"></span>完成度100%(僅本頁顯示灰色)</span>
+                <span class="help-text" style="margin:0;">(執行狀態會連動「美術專案工作分配表」該格的底色；完成度灰色只在本頁顯示，不會影響分配表)</span>
+            </div>
+
+            <div class="table-scroll">
+                <table id="statusTable">
+                    <thead>
+                        <tr>
+                            <th>專案名稱</th>
+                            <th>負責角色</th>
+                            <th>專案預估總工時</th>
+                            <th>執行狀態</th>
+                            <th>完成度</th>
+                        </tr>
+                    </thead>
+                    <tbody id="statusTableBody"></tbody>
+                </table>
+            </div>
+            <p id="statusEmptyMsg" class="help-text" style="display:none;">這個人目前在「美術專案工作分配表」裡沒有被指派任何專案。</p>
+        </div>
+
+        <!-- 頁籤四：圖片壓縮工具 -->
+        <div id="page-compress" class="tab-page">
+            <span class="help-text" style="margin-bottom:12px; display:block;">
+                所有壓縮都在你自己的瀏覽器裡執行，圖片不會上傳到任何伺服器，關掉分頁就沒了，記得壓縮完要下載。支援 JPG / PNG，可以一次選多張。「PNG 最佳化」選項用的是跟 TinyPNG 相同原理的調色盤壓縮，輸出仍是標準 PNG 格式，沒有張數/月份限制。
+            </span>
+
+            <div id="compressDropzone" class="dropzone">
+                📥 把圖片拖曳到這裡，或點擊選擇檔案(可多選、可分次拖)
+                <input type="file" id="compressFileInput" accept="image/png,image/jpeg" multiple style="display:none;">
+            </div>
+
+            <div class="control-bar">
+                <div class="control-group">
+                    <label for="compressFormatSelect"><strong>輸出格式：</strong></label>
+                    <select id="compressFormatSelect" style="min-width: 200px;">
+                        <option value="auto">自動建議(PNG→PNG最佳化／JPG→JPEG)</option>
+                        <option value="png-lossy">PNG 最佳化(有損，類似 TinyPNG，維持 PNG 格式)</option>
+                        <option value="webp">WebP (壓縮率最高，仍保留透明)</option>
+                        <option value="jpeg">JPEG (檔案小，但不支援透明背景)</option>
+                        <option value="png">PNG (無損，原樣重新編碼，壓縮效果有限)</option>
+                    </select>
+                    <span class="help-text" id="compressFormatHint"></span>
+                </div>
+                <div class="control-group">
+                    <label for="compressQuality"><strong id="compressQualityLabel">畫質：</strong></label>
+                    <div class="quality-row">
+                        <input type="range" id="compressQuality" min="10" max="95" value="80">
+                        <span id="compressQualityValue">80</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="compressStartBtn" class="btn-primary">開始壓縮</button>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="compressDownloadAllBtn" class="btn-secondary">📦 打包下載全部(ZIP)</button>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="compressClearBtn" class="btn-secondary">清除全部</button>
+                </div>
+            </div>
+
+            <span class="help-text" id="compressFileCount"></span>
+            <div id="compressQueuePreview" class="queue-preview"></div>
+
+            <div id="compressResults"></div>
+        </div>
+
+        <!-- 頁籤五：影片壓縮工具 -->
+        <div id="page-videocompress" class="tab-page">
+            <span class="help-text" style="margin-bottom:12px; display:block;">
+                一樣完全在瀏覽器裡執行，影片不會上傳到任何伺服器。⚠️ 跟圖片不同，影片壓縮引擎的核心元件(約 30MB)已經放在同資料夾的 <code>vendor</code> 資料夾裡，不用連外部網站下載。影片轉檔比圖片吃資源非常多，大檔案或多檔案處理會比較久，請耐心等待、不要關掉分頁。建議先用小檔案測試。<br>
+                🔧 <strong>這個功能對伺服器有特殊要求</strong>：本機測試請用附上的 <code>server.js</code> 開啟(在資料夾裡執行 <code>node server.js</code>，再打開 http://localhost:8080)，一般的 Live Server 或直接雙擊 index.html 都無法讓影片引擎正常初始化(會卡住不動)。<strong>如果是部署到 GitHub Pages</strong>，已經內建 <code>coi-serviceworker.js</code> 自動補標頭，直接上傳整個資料夾應該就能動，第一次開啟頁面會自動重新整理一次(這是正常的，用來讓補丁生效)。「圖片壓縮工具」「工作分配表」等其他頁籤不受影響，用什麼方式開都可以。
+            </span>
+
+            <div id="videoDropzone" class="dropzone">
+                📥 把影片拖曳到這裡，或點擊選擇檔案(可多選、可分次拖)
+                <input type="file" id="videoFileInput" accept="video/mp4,video/webm,video/quicktime,video/x-msvideo" multiple style="display:none;">
+            </div>
+
+            <div class="control-bar">
+                <div class="control-group">
+                    <label for="videoFormatSelect"><strong>輸出格式：</strong></label>
+                    <select id="videoFormatSelect" style="min-width: 200px;">
+                        <option value="mp4">MP4 (H.264，相容性最好)</option>
+                        <option value="webm">WebM (VP9，壓縮率較高)</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="videoQuality"><strong>畫質：</strong></label>
+                    <div class="quality-row">
+                        <input type="range" id="videoQuality" min="10" max="95" value="70">
+                        <span id="videoQualityValue">70</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="videoStartBtn" class="btn-primary">開始壓縮</button>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="videoDownloadAllBtn" class="btn-secondary">📦 打包下載全部(ZIP)</button>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="videoClearBtn" class="btn-secondary">清除全部</button>
+                </div>
+            </div>
+
+            <span class="help-text" id="videoFileCount"></span>
+            <div id="videoQueuePreview" class="queue-preview"></div>
+            <span class="help-text" id="videoEngineStatus"></span>
+            <div id="videoDiagBox" class="diag-box">
+                <div id="videoDiagLine">環境檢查：讀取中...</div>
+                <details>
+                    <summary>詳細記錄(除錯用，不用看也沒關係)</summary>
+                    <pre id="videoDebugLog"></pre>
+                </details>
+            </div>
+
+            <div id="videoResults"></div>
+        </div>
+
+        <!-- 頁籤六：AI 圖片放大工具 -->
+        <div id="page-upscale" class="tab-page">
+            <span class="help-text" style="margin-bottom:12px; display:block;">
+                一樣完全在瀏覽器裡執行，圖片不會上傳到任何伺服器，模型檔案(約 30MB，已換成 UpscalerJS 品質最高的 <code>esrgan-thick</code> 模型)已經放在同資料夾的 <code>vendor/upscaler</code> 裡，不用連外部網站。
+                ⚠️ 這裡說的「放大」是用 AI 模型去「推測、補畫」放大後的細節，讓畫面比單純拉伸銳利很多，但不是真的把原始遺失的畫質找回來，嚴格來說不是数學上的「無損」。
+                目前固定 <strong>2 倍放大</strong>，模型是通用型(非動漫專用)，實際效果請自行測試評估是否符合美術素材的需求。
+                <strong>換成高品質模型後，處理時間會明顯變長</strong>(官方文件也寫這個模型「建議在有 GPU 的 Node.js 環境用，瀏覽器內也能跑但速度會慢不少」)，大圖或多張圖請耐心等待，不要關掉分頁。
+            </span>
+
+            <div id="upscaleDropzone" class="dropzone">
+                📥 把圖片拖曳到這裡，或點擊選擇檔案(可多選、可分次拖)
+                <input type="file" id="upscaleFileInput" accept="image/png,image/jpeg" multiple style="display:none;">
+            </div>
+
+            <div class="control-bar">
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="upscaleStartBtn" class="btn-primary">開始放大(2x)</button>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="upscaleDownloadAllBtn" class="btn-secondary">📦 打包下載全部(ZIP)</button>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="upscaleClearBtn" class="btn-secondary">清除全部</button>
+                </div>
+            </div>
+
+            <span class="help-text" id="upscaleFileCount"></span>
+            <div id="upscaleQueuePreview" class="queue-preview"></div>
+            <span class="help-text" id="upscaleEngineStatus"></span>
+
+            <div id="upscaleResults"></div>
+        </div>
+
+        <!-- 頁籤七：AI 去背工具 -->
+        <div id="page-bgremove" class="tab-page">
+            <span class="help-text" style="margin-bottom:12px; display:block;">
+                一樣完全在瀏覽器裡執行，圖片不會上傳到任何伺服器。「AI 智慧去背」的模型檔案(依畫質選擇約 45～90MB)放在同資料夾的 <code>vendor/bgremove</code> 裡，不用連外部網站。
+                ⚠️ 使用「AI 智慧去背」前，請先在「有網路」的環境下，於專案資料夾執行一次 <code>node download-bgremove-model.js</code> 下載模型檔案(細節看 <code>vendor/bgremove/README.txt</code>)，下載完成後就能完全離線使用，之後也不用再下載。「純色背景移除」不需要下載模型，隨時可用。<br>
+                💡 <strong>怎麼選：</strong>一般照片、背景複雜或有漸層 → 用「AI 智慧去背」；背景是均勻色塊(例如白底參考圖、去背過的素材圖)、畫面裡有多個獨立物件都要保留 → 用「純色背景移除」，效果通常更準也更快，因為判斷邏輯是「顏色」而不是「找主角」，不會漏掉邊緣的角色。
+            </span>
+
+            <div id="bgremoveDropzone" class="dropzone">
+                📥 把圖片拖曳到這裡，或點擊選擇檔案(可多選、可分次拖)
+                <input type="file" id="bgremoveFileInput" accept="image/png,image/jpeg" multiple style="display:none;">
+            </div>
+
+            <div class="control-bar">
+                <div class="control-group">
+                    <label for="bgremoveModeSelect"><strong>去背方式：</strong></label>
+                    <select id="bgremoveModeSelect" style="min-width: 260px;">
+                        <option value="ai" selected>AI 智慧去背(適合一般照片、背景複雜)</option>
+                        <option value="solid">純色背景移除(適合背景是均勻色塊，可保留多個獨立物件)</option>
+                        <option value="multi">多物件模式(手動框選＋個別去背，適合複雜背景又有多個角色)</option>
+                    </select>
+                </div>
+                <div class="control-group" id="bgremoveModelGroup">
+                    <label for="bgremoveModelSelect"><strong>模型畫質：</strong></label>
+                    <select id="bgremoveModelSelect" style="min-width: 220px;">
+                        <option value="large" selected>完整品質(最準，模型較大，複雜背景/多物件裁切建議用這個)</option>
+                        <option value="medium">中等品質(較準，模型約 90MB)</option>
+                        <option value="small">快速(檔案小，模型約 45MB，邊緣較粗)</option>
+                    </select>
+                </div>
+                <div class="control-group" id="bgremoveToleranceGroup" style="display:none;">
+                    <label for="bgremoveTolerance"><strong>誤差容許：</strong></label>
+                    <div class="quality-row">
+                        <input type="range" id="bgremoveTolerance" min="5" max="100" value="30">
+                        <span id="bgremoveToleranceValue">30</span>
+                    </div>
+                </div>
+                <div class="control-group" id="bgremoveFeatherGroup" style="display:none;">
+                    <label for="bgremoveFeather"><strong>邊緣羽化：</strong></label>
+                    <div class="quality-row">
+                        <input type="range" id="bgremoveFeather" min="0" max="60" value="20">
+                        <span id="bgremoveFeatherValue">20</span>
+                    </div>
+                </div>
+                <div class="control-group" id="bgremoveSolidColorGroup" style="display:none;">
+                    <label for="bgremoveSolidColorMode"><strong>背景色判定：</strong></label>
+                    <select id="bgremoveSolidColorMode" style="min-width: 150px;">
+                        <option value="auto" selected>自動偵測(取四角平均色)</option>
+                        <option value="manual">手動指定顏色</option>
+                    </select>
+                </div>
+                <div class="control-group" id="bgremoveSolidColorPickGroup" style="display:none;">
+                    <label for="bgremoveSolidColorPicker"><strong>指定背景色：</strong></label>
+                    <input type="color" id="bgremoveSolidColorPicker" value="#ffffff">
+                </div>
+                <div class="control-group">
+                    <label for="bgremoveBgSelect"><strong>輸出背景：</strong></label>
+                    <select id="bgremoveBgSelect" style="min-width: 140px;">
+                        <option value="transparent" selected>透明</option>
+                        <option value="white">白色</option>
+                        <option value="custom">自訂顏色</option>
+                    </select>
+                </div>
+                <div class="control-group" id="bgremoveColorGroup" style="display:none;">
+                    <label for="bgremoveColorPicker"><strong>顏色：</strong></label>
+                    <input type="color" id="bgremoveColorPicker" value="#ffffff">
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="bgremoveStartBtn" class="btn-primary">開始去背</button>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="bgremoveDownloadAllBtn" class="btn-secondary">📦 打包下載全部(ZIP)</button>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="bgremoveClearBtn" class="btn-secondary">清除全部</button>
+                </div>
+            </div>
+            <span class="help-text" id="bgremoveModeHint" style="display:block; margin-bottom:10px;"></span>
+
+            <span class="help-text" id="bgremoveFileCount"></span>
+            <div id="bgremoveQueuePreview" class="queue-preview"></div>
+            <span class="help-text" id="bgremoveEngineStatus"></span>
+
+            <div id="bgremoveResults"></div>
+        </div>
+
+        <!-- 多物件模式用的框選互動視窗，平常隱藏，只有處理到「多物件模式」的圖片時才會彈出 -->
+        <div id="bgremoveMultiModal" class="bgremove-modal" style="display:none;">
+            <div class="bgremove-modal-inner">
+                <div class="bgremove-modal-header">
+                    <strong id="bgremoveMultiTitle">框選角色</strong>
+                    <span class="help-text">在下面的圖片上用滑鼠拖曳畫框，框出每一個角色(數量不限、順序不限)。<strong>框選時盡量貼緊角色邊緣</strong>，不要留太多背景在框裡——背景越複雜(例如場景照片)，框裡留的背景雜訊越多，AI 越容易判斷錯誤，把角色本體誤判成背景。框好全部之後按「完成，開始去背這張」，每個框會分別做 AI 去背再自動合成回同一張透明 PNG。框錯了可以「復原上一個框」或「清除全部框」重畫。</span>
+                </div>
+                <div class="bgremove-modal-canvas-wrap">
+                    <canvas id="bgremoveMultiCanvas"></canvas>
+                </div>
+                <div class="bgremove-modal-footer">
+                    <span class="help-text" id="bgremoveMultiBoxCount">已框選 0 個角色</span>
+                    <div class="bgremove-modal-buttons">
+                        <button id="bgremoveMultiUndoBtn" class="btn-secondary">↩ 復原上一個框</button>
+                        <button id="bgremoveMultiClearBtn" class="btn-secondary">清除全部框</button>
+                        <button id="bgremoveMultiSkipBtn" class="btn-secondary">跳過這張</button>
+                        <button id="bgremoveMultiConfirmBtn" class="btn-primary">✅ 完成，開始去背這張</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/upng-js@2.1.0/UPNG.js"></script>
+    <script src="./vendor/upscaler/tf.min.js"></script>
+    <script src="./vendor/upscaler/upscaler.min.js"></script>
+    <script src="./vendor/upscaler/esrgan-thick-x2.min.js"></script>
+    <!--
+      去背工具用的 @imgly/background-removal 內部用 import("onnxruntime-web") 這種寫法載入引擎，
+      這種「裸模組名稱」在沒有 Webpack/Vite 等打包工具的情況下，瀏覽器不知道要去哪裡找，
+      要靠這個 import map 明確指定實際檔案路徑，才能正常解析。務必放在 main.js 的 script 標籤之前。
+    -->
+    <script type="importmap">
+    {
+        "imports": {
+            "onnxruntime-web": "./vendor/bgremove/onnxruntime-web/ort.bundle.min.mjs",
+            "onnxruntime-web/webgpu": "./vendor/bgremove/onnxruntime-web/ort.webgpu.bundle.min.mjs"
+        }
+    }
+    </script>
+    <script type="module" src="main.js"></script>
+</body>
+</html>
