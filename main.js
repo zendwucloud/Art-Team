@@ -89,6 +89,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const importText = document.getElementById('importText');
     const importConfirmBtn = document.getElementById('importConfirmBtn');
     const importCancelBtn = document.getElementById('importCancelBtn');
+    const deleteRowsBtn = document.getElementById('deleteRowsBtn');
+
+    // 頁籤一「美術組工作分配表」目前被勾選(準備刪除)的列，存 row.id，重新渲染時要保留這個狀態
+    let selectedAssignRowIds = new Set();
 
     function makeBlankRow() {
         return {
@@ -186,7 +190,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderAssignHeader() {
         assignTableHeader.innerHTML = '';
-        const cols = ['', '專案名稱', '上線日期', '企劃'];
+
+        const thSelect = document.createElement('th');
+        thSelect.className = 'col-select';
+        const selectAllCheckbox = document.createElement('input');
+        selectAllCheckbox.type = 'checkbox';
+        selectAllCheckbox.title = '全選 / 取消全選';
+        const sortedRowsForHeader = getSortedRows();
+        selectAllCheckbox.checked = sortedRowsForHeader.length > 0 && sortedRowsForHeader.every(r => selectedAssignRowIds.has(r.id));
+        selectAllCheckbox.addEventListener('change', () => {
+            if (selectAllCheckbox.checked) {
+                getSortedRows().forEach(r => selectedAssignRowIds.add(r.id));
+            } else {
+                selectedAssignRowIds.clear();
+            }
+            renderAssignPage();
+        });
+        thSelect.appendChild(selectAllCheckbox);
+        assignTableHeader.appendChild(thSelect);
+
+        const cols = ['專案名稱', '上線日期', '企劃'];
         cols.forEach(label => {
             const th = document.createElement('th');
             th.textContent = label;
@@ -206,20 +229,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
         getSortedRows().forEach(row => {
             const tr = document.createElement('tr');
+            if (selectedAssignRowIds.has(row.id)) tr.classList.add('row-selected');
 
-            // 刪除按鈕
-            const tdDel = document.createElement('td');
-            const delBtn = document.createElement('button');
-            delBtn.className = 'btn-danger';
-            delBtn.textContent = '✕';
-            delBtn.title = '刪除此列';
-            delBtn.addEventListener('click', () => {
-                if (!confirm(`確定要刪除「${row.projectName || '(未命名專案)'}」這一列嗎？`)) return;
-                assignmentSheet.rows = assignmentSheet.rows.filter(r => r.id !== row.id);
-                saveData();
+            // 勾選欄(取代原本的 ✕ 刪除按鈕)
+            const tdSelect = document.createElement('td');
+            tdSelect.className = 'col-select';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = selectedAssignRowIds.has(row.id);
+            checkbox.addEventListener('change', () => {
+                if (checkbox.checked) {
+                    selectedAssignRowIds.add(row.id);
+                } else {
+                    selectedAssignRowIds.delete(row.id);
+                }
+                tr.classList.toggle('row-selected', checkbox.checked);
+                const selectAllCheckbox = assignTableHeader.querySelector('th.col-select input[type="checkbox"]');
+                if (selectAllCheckbox) {
+                    const allRows = getSortedRows();
+                    selectAllCheckbox.checked = allRows.length > 0 && allRows.every(r => selectedAssignRowIds.has(r.id));
+                }
             });
-            tdDel.appendChild(delBtn);
-            tr.appendChild(tdDel);
+            tdSelect.appendChild(checkbox);
+            tr.appendChild(tdSelect);
 
             // 專案名稱 (依開頭關鍵字自動分色) / 上線日期 / 企劃
             const projectCell = makeTextCell(row, 'projectName', 'col-project');
@@ -296,6 +328,21 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // 將這筆新資料推入分配表陣列中並存檔
         assignmentSheet.rows.push(newRow);
+        saveData();
+    });
+
+    deleteRowsBtn.addEventListener('click', () => {
+        if (selectedAssignRowIds.size === 0) {
+            alert('請先勾選要刪除的專案列(表格最左邊那一欄)。');
+            return;
+        }
+
+        const targetRows = assignmentSheet.rows.filter(r => selectedAssignRowIds.has(r.id));
+        const names = targetRows.map(r => r.projectName || '(未命名專案)').join('、');
+        if (!confirm(`確定要刪除已勾選的 ${targetRows.length} 個項目嗎？且無法復原。\n\n${names}`)) return;
+
+        assignmentSheet.rows = assignmentSheet.rows.filter(r => !selectedAssignRowIds.has(r.id));
+        selectedAssignRowIds.clear();
         saveData();
     });
 
