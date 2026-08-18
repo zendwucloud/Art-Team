@@ -59,11 +59,6 @@
         #assignTable td.col-date { background-color: #C9DAF8; min-width: 70px; }
         #assignTable td.col-planner { background-color: #9FC5E9; min-width: 60px; }
         #assignTable td.cell-role { min-width: 60px; }
-        #assignTable td.col-select { min-width: 28px; text-align: center; }
-        #assignTable td.col-select input[type="checkbox"], #assignTable th.col-select input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
-        /* 勾選後該列用外框「圈起來」，不覆蓋原本每個儲存格的角色顏色 */
-        #assignTable tbody tr.row-selected { outline: 2px solid #2563eb; outline-offset: -1px; }
-        #assignTable tbody tr.row-selected td { position: relative; }
         #assignTable input[type="text"] {
             border: 1px solid transparent; background: transparent; box-sizing: border-box;
             font-size: 14px; padding: 0px 2px; height: 100%; width: 100%;
@@ -243,7 +238,6 @@
             <div class="assign-toolbar">
                 <button id="addRowBtn" class="btn-primary">+ 新增專案列</button>
                 <button id="toggleImportBtn" class="btn-secondary">📥 從 Excel 貼上匯入</button>
-                <button id="deleteRowsBtn" class="btn-danger-solid">🗑 刪除專案</button>
             </div>
             <div id="importPanel">
                 <span class="help-text">
@@ -351,6 +345,7 @@
                     <thead>
                         <tr>
                             <th>專案名稱</th>
+                            <th>上線日期</th>
                             <th>負責角色</th>
                             <th>專案預估總工時</th>
                             <th>執行狀態</th>
