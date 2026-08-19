@@ -1,7 +1,7 @@
 import config from './config.js';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCDZDO6BbOiXsWT2KU0b92qJpUYq3aeA1M",
@@ -34,17 +34,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let appStarted = false; // startApp() 只應該真正執行一次，避免重複登入/登出時重複掛上一堆監聽器
 
-    googleLoginBtn.addEventListener('click', async () => {
-        loginStatus.textContent = '登入中...';
+    googleLoginBtn.addEventListener('click', () => {
+        loginStatus.textContent = '正在導向 Google 登入頁面...';
         loginStatus.classList.remove('error');
-        try {
-            await signInWithPopup(auth, googleProvider);
-            // 登入成功後，下面的 onAuthStateChanged 會接手判斷白名單、顯示主畫面
-        } catch (err) {
-            console.error('登入失敗：', err);
-            loginStatus.textContent = '登入失敗，請再試一次。';
-            loginStatus.classList.add('error');
-        }
+        signInWithRedirect(auth, googleProvider);
+        // 這裡會直接整頁跳轉離開，登入完成後跳回本頁時，
+        // 下面的 getRedirectResult() 跟 onAuthStateChanged 會接手處理後續。
+    });
+
+    getRedirectResult(auth).catch((err) => {
+        console.error('Google 登入失敗：', err);
+        loginStatus.textContent = '登入失敗，請再試一次。';
+        loginStatus.classList.add('error');
     });
 
     logoutBtn.addEventListener('click', () => {
