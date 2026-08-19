@@ -1,7 +1,7 @@
 import config from './config.js';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCDZDO6BbOiXsWT2KU0b92qJpUYq3aeA1M",
@@ -78,18 +78,38 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function doLogin() {
-        authHint.textContent = '正在導向 Google...';
+    // 用彈出視窗登入。
+    // 為什麼不用 signInWithRedirect：整頁跳轉的流程需要跨網域讀取 firebaseapp.com 的儲存空間，
+    // 而 Chrome 現在會封鎖這種第三方儲存存取，導致驗證狀態存不住、在 Google 那邊一直繞圈。
+    // (這是 Firebase 官方記載的已知限制，只有把網站部署在 Firebase Hosting 上才不受影響。)
+    // 彈出視窗的流程是直接把結果回傳給母頁面，不依賴跨網域儲存，剛好避開這個問題。
+    async function doLogin() {
+        authHint.textContent = '登入中...';
         authHint.classList.remove('error');
-        signInWithRedirect(auth, googleProvider);
+        try {
+            await signInWithPopup(auth, googleProvider);
+            // 成功後由 onAuthStateChanged 接手處理白名單驗證與畫面切換
+        } catch (err) {
+            console.error('Google 登入失敗：', err);
+            if (err && err.code === 'auth/popup-blocked') {
+                authHint.textContent = '彈出視窗被瀏覽器擋住，請允許後再試';
+            } else if (err && err.code === 'auth/popup-closed-by-user') {
+                authHint.textContent = '請先登入';
+                authHint.classList.remove('error');
+                return;
+            } else {
+                authHint.textContent = '登入失敗，請再試一次';
+            }
+            authHint.classList.add('error');
+        }
     }
 
     googleLoginBtn.addEventListener('click', doLogin);
 
+    // 仍然保留這段：如果之前有殘留的整頁跳轉登入流程沒走完，回到頁面時把結果收乾淨，
+    // 避免舊的登入狀態卡在中間。正常情況下這裡不會有任何動作。
     getRedirectResult(auth).catch((err) => {
-        console.error('Google 登入失敗：', err);
-        authHint.textContent = '登入失敗，請再試一次';
-        authHint.classList.add('error');
+        console.error('殘留的跳轉登入流程處理失敗(可忽略)：', err);
     });
 
     // 點頭像開合小選單
