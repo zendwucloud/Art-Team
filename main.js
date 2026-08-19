@@ -1,6 +1,6 @@
 import config from './config.js';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
@@ -52,13 +52,39 @@ document.addEventListener('DOMContentLoaded', () => {
         signOut(auth);
     });
 
-    onAuthStateChanged(auth, (user) => {
+    // 主動確認這個帳號有沒有讀取資料的權限(也就是有沒有在 allowedUsers 白名單裡)。
+    // 用實際讀一次資料來判斷，比被動等 onSnapshot 報錯可靠，也不會有時間差問題。
+    async function verifyAccess() {
+        try {
+            await getDoc(docRef);
+            return true;
+        } catch (err) {
+            if (err && err.code === 'permission-denied') return false;
+            // 其他錯誤(例如暫時的網路問題)不當成沒權限，先放行，避免誤踢使用者
+            console.error('確認權限時發生非權限類的錯誤：', err);
+            return true;
+        }
+    }
+
+    onAuthStateChanged(auth, async (user) => {
         if (!user) {
             appRoot.style.display = 'none';
             loginScreen.style.display = 'flex';
             return;
         }
 
+        loginStatus.textContent = '登入成功，正在確認使用權限...';
+        loginStatus.classList.remove('error');
+
+        const allowed = await verifyAccess();
+        if (!allowed) {
+            loginStatus.textContent = `這個帳號(${user.email})沒有使用權限，請聯絡管理者把你的 email 加進白名單。`;
+            loginStatus.classList.add('error');
+            await signOut(auth);
+            return;
+        }
+
+        loginStatus.textContent = '';
         userEmailLabel.textContent = user.email || '';
         loginScreen.style.display = 'none';
         appRoot.style.display = 'block';
@@ -120,13 +146,11 @@ document.addEventListener('DOMContentLoaded', () => {
         renderAssignPage();
         renderStatusPage();
     }, (error) => {
-        // 這裡會抓到「已登入，但 email 不在 allowedUsers 白名單裡」被 Firestore 規則擋下的情況(permission-denied)。
+        // 讀取失敗時只記錄，不要在這裡自動登出。
+        // 原因：登入成功的瞬間，這個即時監聽有可能還沒帶著最新的驗證狀態就先送出請求，
+        // 因而收到一次 permission-denied，如果一收到就登出，會把「其實有權限的人」直接踢回登入畫面。
+        // 真正的白名單判斷改由下面 onAuthStateChanged 裡的 verifyAccess() 主動確認一次，比較可靠。
         console.error('讀取雲端資料失敗：', error);
-        if (error.code === 'permission-denied' && auth.currentUser) {
-            loginStatus.textContent = `這個帳號(${auth.currentUser.email})沒有使用權限，請聯絡管理者把你的 email 加進白名單。`;
-            loginStatus.classList.add('error');
-            signOut(auth);
-        }
     });
 
     /* =========================================================
