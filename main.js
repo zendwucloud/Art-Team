@@ -1,6 +1,7 @@
 import config from './config.js';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCDZDO6BbOiXsWT2KU0b92qJpUYq3aeA1M",
@@ -14,8 +15,195 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const docRef = doc(db, 'scheduler', 'multiProjectsData');
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
 
 document.addEventListener('DOMContentLoaded', () => {
+
+    /* =========================================================
+       登入 / Google 帳號驗證
+       設計：整個平台一律可以進入，四個工具頁籤(圖片壓縮、影片壓縮、AI 放大、AI 去背)
+       不需要登入就能使用；只有前三頁(工作分配表、工時試算表、專案執行進度表)
+       牽涉到雲端資料，必須登入而且 email 在 allowedUsers 白名單裡才看得到。
+    ========================================================= */
+    const googleLoginBtn = document.getElementById('googleLoginBtn');
+    const authHint = document.getElementById('authHint');
+    const userAvatar = document.getElementById('userAvatar');
+    const authMenu = document.getElementById('authMenu');
+    const userEmailLabel = document.getElementById('userEmailLabel');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    // 這三個頁籤的內容需要登入才能看
+    const AUTH_REQUIRED_TABS = ['assign', 'estimate', 'status'];
+
+    let appStarted = false;      // startApp() 只跑一次
+    let subscribeData = null;    // startApp() 裡會把「開始接收雲端資料」的函式指定給它
+    let unsubscribeData = null;  // onSnapshot 回傳的取消訂閱函式，登出時用
+    let dataSubscribed = false;
+
+    // 把每個需要登入的頁籤，原本的內容包進一層 wrapper，並在前面插入一段「請先登入」提示，
+    // 之後只要切換這兩者的顯示狀態就好，不會動到內部元素原有的 display 設定。
+    function prepareAuthGates() {
+        AUTH_REQUIRED_TABS.forEach(tab => {
+            const page = document.getElementById('page-' + tab);
+            if (!page || page.querySelector('.auth-content-wrap')) return;
+
+            const wrap = document.createElement('div');
+            wrap.className = 'auth-content-wrap';
+            while (page.firstChild) wrap.appendChild(page.firstChild);
+
+            const notice = document.createElement('div');
+            notice.className = 'auth-notice';
+            notice.innerHTML = `
+                <strong>🔒 這個頁面需要登入才能查看</strong>
+                請使用公司核發的 Google 帳號登入。<br>
+                如果登入後仍然看不到內容，代表你的帳號還沒被加入白名單，請聯絡管理者。
+                <div><button class="login-btn auth-notice-login">Google 登入</button></div>
+            `;
+            notice.querySelector('.auth-notice-login').addEventListener('click', doLogin);
+
+            page.appendChild(notice);
+            page.appendChild(wrap);
+        });
+    }
+
+    function setAuthGates(isLoggedIn) {
+        AUTH_REQUIRED_TABS.forEach(tab => {
+            const page = document.getElementById('page-' + tab);
+            if (!page) return;
+            const wrap = page.querySelector('.auth-content-wrap');
+            const notice = page.querySelector('.auth-notice');
+            if (wrap) wrap.style.display = isLoggedIn ? '' : 'none';
+            if (notice) notice.style.display = isLoggedIn ? 'none' : 'block';
+        });
+    }
+
+    // 用彈出視窗登入。
+    // 為什麼不用 signInWithRedirect：整頁跳轉的流程需要跨網域讀取 firebaseapp.com 的儲存空間，
+    // 而 Chrome 現在會封鎖這種第三方儲存存取，導致驗證狀態存不住、在 Google 那邊一直繞圈。
+    // (這是 Firebase 官方記載的已知限制，只有把網站部署在 Firebase Hosting 上才不受影響。)
+    // 彈出視窗的流程是直接把結果回傳給母頁面，不依賴跨網域儲存，剛好避開這個問題。
+    async function doLogin() {
+        authHint.textContent = '登入中...';
+        authHint.classList.remove('error');
+        try {
+            await signInWithPopup(auth, googleProvider);
+            // 成功後由 onAuthStateChanged 接手處理白名單驗證與畫面切換
+        } catch (err) {
+            console.error('Google 登入失敗：', err);
+            if (err && err.code === 'auth/popup-blocked') {
+                authHint.textContent = '彈出視窗被瀏覽器擋住，請允許後再試';
+            } else if (err && err.code === 'auth/popup-closed-by-user') {
+                authHint.textContent = '請先登入';
+                authHint.classList.remove('error');
+                return;
+            } else {
+                authHint.textContent = '登入失敗，請再試一次';
+            }
+            authHint.classList.add('error');
+        }
+    }
+
+    googleLoginBtn.addEventListener('click', doLogin);
+
+    // 仍然保留這段：如果之前有殘留的整頁跳轉登入流程沒走完，回到頁面時把結果收乾淨，
+    // 避免舊的登入狀態卡在中間。正常情況下這裡不會有任何動作。
+    getRedirectResult(auth).catch((err) => {
+        console.error('殘留的跳轉登入流程處理失敗(可忽略)：', err);
+    });
+
+    // 點頭像開合小選單
+    userAvatar.addEventListener('click', (e) => {
+        e.stopPropagation();
+        authMenu.style.display = authMenu.style.display === 'none' ? 'flex' : 'none';
+    });
+    document.addEventListener('click', () => { authMenu.style.display = 'none'; });
+    authMenu.addEventListener('click', (e) => e.stopPropagation());
+
+    logoutBtn.addEventListener('click', async () => {
+        authMenu.style.display = 'none';
+        if (unsubscribeData) {
+            unsubscribeData();
+            unsubscribeData = null;
+            dataSubscribed = false;
+        }
+        await signOut(auth);
+    });
+
+    // 主動確認這個帳號有沒有讀取資料的權限(也就是有沒有在 allowedUsers 白名單裡)。
+    // 用實際讀一次資料來判斷，比被動等 onSnapshot 報錯可靠，也不會有時間差問題。
+    async function verifyAccess() {
+        try {
+            await getDoc(docRef);
+            return true;
+        } catch (err) {
+            if (err && err.code === 'permission-denied') return false;
+            console.error('確認權限時發生非權限類的錯誤：', err);
+            return true; // 網路等暫時性問題不當成沒權限，避免誤擋
+        }
+    }
+
+    function showLoggedOutUI() {
+        authHint.style.display = '';
+        googleLoginBtn.style.display = '';
+        userAvatar.style.display = 'none';
+        authMenu.style.display = 'none';
+        setAuthGates(false);
+    }
+
+    function showLoggedInUI(user) {
+        authHint.style.display = 'none';
+        authHint.classList.remove('error');
+        googleLoginBtn.style.display = 'none';
+        userAvatar.style.display = 'flex';
+        userEmailLabel.textContent = user.email || '';
+        if (user.photoURL) {
+            userAvatar.innerHTML = `<img src="${user.photoURL}" alt="">`;
+        } else {
+            userAvatar.textContent = (user.displayName || user.email || '?').charAt(0).toUpperCase();
+        }
+        setAuthGates(true);
+    }
+
+    onAuthStateChanged(auth, async (user) => {
+        if (!user) {
+            showLoggedOutUI();
+            return;
+        }
+
+        authHint.textContent = '確認權限中...';
+        authHint.classList.remove('error');
+
+        const allowed = await verifyAccess();
+        if (!allowed) {
+            authHint.textContent = `${user.email} 沒有權限`;
+            authHint.classList.add('error');
+            authHint.style.display = '';
+            googleLoginBtn.style.display = '';
+            userAvatar.style.display = 'none';
+            setAuthGates(false);
+            await signOut(auth);
+            return;
+        }
+
+        showLoggedInUI(user);
+
+        // 通過驗證後才開始接收雲端資料
+        if (subscribeData && !dataSubscribed) {
+            dataSubscribed = true;
+            unsubscribeData = subscribeData();
+        }
+    });
+
+    // 平台本身立刻啟動(四個工具不需要登入就能用)，前三頁的內容則由上面的驗證流程控制顯示
+    prepareAuthGates();
+    setAuthGates(false);
+    if (!appStarted) {
+        appStarted = true;
+        startApp();
+    }
+
+    function startApp() {
 
     /* =========================================================
        共用狀態 / Firebase 存取
@@ -32,7 +220,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    onSnapshot(docRef, (docSnap) => {
+    // 不在這裡直接訂閱，而是把訂閱動作交給外層的登入流程，
+    // 確認「已登入且在白名單裡」之後才開始接收雲端資料，避免未登入時一直被規則擋下報錯。
+    subscribeData = () => onSnapshot(docRef, (docSnap) => {
         if (docSnap.exists()) {
             const data = docSnap.data();
             allProjects = data.projects || {};
@@ -64,6 +254,8 @@ document.addEventListener('DOMContentLoaded', () => {
         renderEstimatePage();
         renderAssignPage();
         renderStatusPage();
+    }, (error) => {
+        console.error('讀取雲端資料失敗：', error);
     });
 
     /* =========================================================
@@ -1369,23 +1561,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // 頁面一載入就先檢查環境，直接把結果顯示在畫面上，不用打開開發者工具
+    // 頁面一載入就先記錄環境資訊，方便之後排查問題。
+    // 注意：改用單執行緒核心之後，crossOriginIsolated / SharedArrayBuffer 已經「不再是必要條件」，
+    // 這裡只做記錄，不再因為它們是 false 就判定環境有問題。
     function runVideoEnvironmentCheck() {
         const coi = window.crossOriginIsolated === true;
         const hasSAB = typeof SharedArrayBuffer !== 'undefined';
         logVideoDebug(`環境檢查：crossOriginIsolated=${coi}, SharedArrayBuffer=${hasSAB}, 目前網址=${window.location.href}`);
 
-        if (coi && hasSAB) {
-            videoDiagLine.className = 'ok';
-            videoDiagLine.textContent = '✅ 環境檢查通過：這個頁面已經正確啟用跨來源隔離，影片引擎可以正常運作。';
-        } else {
-            videoDiagLine.className = 'bad';
-            videoDiagLine.textContent =
-                `❌ 環境檢查未通過(crossOriginIsolated=${coi}，SharedArrayBuffer可用=${hasSAB})，` +
-                `影片引擎會卡住無法初始化。請確認：1) 是用 node server.js 開的、` +
-                `2) 網址是 http://localhost:8080(不是 127.0.0.1:5500 等其他網址)、` +
-                `3) 有先重新整理過頁面。`;
-        }
+        videoDiagLine.className = 'ok';
+        videoDiagLine.textContent =
+            '✅ 影片引擎使用單執行緒版本，不需要特殊的伺服器設定，任何開啟方式都可以使用(速度會比多執行緒版慢一些)。';
     }
     runVideoEnvironmentCheck();
 
@@ -1468,17 +1654,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (ffmpegLoadPromise) return ffmpegLoadPromise;
 
         ffmpegLoadPromise = (async () => {
-            // ffmpeg.wasm 需要瀏覽器的 SharedArrayBuffer，這個功能只有在伺服器回應帶有
-            // Cross-Origin-Opener-Policy / Cross-Origin-Embedder-Policy 這兩個標頭時才會開啟。
-            // 沒有的話引擎會卡在初始化那步、不會丟出錯誤，所以先在這裡主動檢查、直接失敗，
-            // 不要讓使用者以為畫面卡住是自己電腦的問題。
+            // 現在使用的是「單執行緒版」的 ffmpeg 核心(@ffmpeg/core)，
+            // 它不需要 SharedArrayBuffer，也就不需要 COOP/COEP 這兩個特殊標頭，
+            // 因此不管是本機直接開、Live Server 還是部署在 GitHub Pages 都能正常運作。
+            // (先前用的是多執行緒版 @ffmpeg/core-mt，速度較快但必須要有那兩個標頭，
+            //  而補標頭用的 Service Worker 會連帶把 Google 登入與雲端資料的連線弄壞，因此改用單執行緒版。)
             runVideoEnvironmentCheck();
-            if (!window.crossOriginIsolated) {
-                throw new Error(
-                    '瀏覽器目前沒有開啟「跨來源隔離」，影片引擎無法初始化(這不是卡住，是少了必要的伺服器設定)。' +
-                    '請確認是用 node server.js 開的，網址是 http://localhost:8080。'
-                );
-            }
 
             videoEngineStatus.textContent = '⏳ 第一次使用，正在讀取本機影片處理引擎(約 30MB)，請稍候...';
 
@@ -1497,14 +1678,13 @@ document.addEventListener('DOMContentLoaded', () => {
             logVideoDebug(`本機檔案網址：wasmURL=${wasmURL}`);
             logVideoDebug('準備呼叫 ffmpeg.load()(不指定 classWorkerURL，讓它用預設方式在同資料夾找 worker.js)...');
 
-            const LOAD_TIMEOUT_MS = 45000;
+            const LOAD_TIMEOUT_MS = 90000;
             const timeoutPromise = new Promise((_, reject) => {
                 setTimeout(() => {
                     reject(new Error(
                         `引擎初始化超過 ${LOAD_TIMEOUT_MS / 1000} 秒沒有回應，判定為卡住。` +
-                        `目前環境狀態：crossOriginIsolated=${window.crossOriginIsolated}，` +
-                        `SharedArrayBuffer可用=${typeof SharedArrayBuffer !== 'undefined'}。` +
-                        `如果上面兩個都顯示正常，這可能是瀏覽器或防毒軟體封鎖了 Worker/WASM，` +
+                        `引擎檔案約 30MB，第一次載入需要一點時間，如果網路較慢可以重新整理再試一次。` +
+                        `若多試幾次都一樣，可能是瀏覽器或防毒軟體封鎖了 Worker/WASM，` +
                         `可以換一台電腦或換 Chrome/Edge 最新版試試看。`
                     ));
                 }, LOAD_TIMEOUT_MS);
@@ -2674,4 +2854,6 @@ document.addEventListener('DOMContentLoaded', () => {
             bgremoveDownloadAllBtn.textContent = '📦 打包下載全部(ZIP)';
         }
     });
+
+    } // startApp() 結束
 });

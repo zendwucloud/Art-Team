@@ -1,146 +1,45 @@
-/*! coi-serviceworker v0.1.7 - Guido Zuidhof and contributors, licensed under MIT */
-let coepCredentialless = false;
+/**
+ * 這個檔案原本是 coi-serviceworker，用途是在 GitHub Pages 上補 COOP/COEP 標頭，
+ * 讓「影片壓縮工具」需要的 SharedArrayBuffer 可以啟用。
+ *
+ * 但它的作法是攔截整個網站發出的所有網路請求並改寫標頭，
+ * 這會連帶把 Google 登入與 Firestore 雲端資料的連線也一起弄壞(登入會一直繞回登入畫面)。
+ * 因為登入與雲端資料比線上版的影片壓縮重要，所以改成不使用它。
+ *
+ * Service Worker 一旦註冊過就會常駐在使用者的瀏覽器裡，
+ * 光是把 index.html 裡引用它的那行刪掉並不會讓它消失。
+ * 因此這個檔案的內容被換成「自我移除」的版本：
+ * 瀏覽器之後再檢查這個檔案時，就會執行下面的程式碼把自己註銷掉，
+ * 已經裝了舊版的人也會自動被清乾淨，不需要每個人手動去開發者工具移除。
+ *
+ * 影片壓縮工具在本機用 node server.js 開啟時仍然完全正常(server.js 會直接送出正確標頭)，
+ * 只有部署在 GitHub Pages 的線上版無法使用該功能。
+ */
+
 if (typeof window === 'undefined') {
-    self.addEventListener("install", () => self.skipWaiting());
-    self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+    // Service Worker 端：安裝後立刻接管，然後把自己註銷，並重新整理所有正在使用的分頁
+    self.addEventListener('install', () => self.skipWaiting());
 
-    self.addEventListener("message", (ev) => {
-        if (!ev.data) {
-            return;
-        } else if (ev.data.type === "deregister") {
-            self.registration
-                .unregister()
-                .then(() => {
-                    return self.clients.matchAll();
-                })
-                .then(clients => {
-                    clients.forEach((client) => client.navigate(client.url));
-                });
-        } else if (ev.data.type === "coepCredentialless") {
-            coepCredentialless = ev.data.value;
-        }
+    self.addEventListener('activate', (event) => {
+        event.waitUntil((async () => {
+            try {
+                await self.registration.unregister();
+                const clients = await self.clients.matchAll({ type: 'window' });
+                clients.forEach((client) => client.navigate(client.url));
+            } catch (e) {
+                // 就算註銷失敗也不要拋錯，下次瀏覽器再檢查時還會再試一次
+            }
+        })());
     });
 
-    self.addEventListener("fetch", function (event) {
-        const r = event.request;
-        if (r.cache === "only-if-cached" && r.mode !== "same-origin") {
-            return;
-        }
-
-        const request = (coepCredentialless && r.mode === "no-cors")
-            ? new Request(r, {
-                credentials: "omit",
-            })
-            : r;
-        event.respondWith(
-            fetch(request)
-                .then((response) => {
-                    if (response.status === 0) {
-                        return response;
-                    }
-
-                    const newHeaders = new Headers(response.headers);
-                    newHeaders.set("Cross-Origin-Embedder-Policy",
-                        coepCredentialless ? "credentialless" : "require-corp"
-                    );
-                    if (!coepCredentialless) {
-                        newHeaders.set("Cross-Origin-Resource-Policy", "cross-origin");
-                    }
-                    newHeaders.set("Cross-Origin-Opener-Policy", "same-origin");
-
-                    return new Response(response.body, {
-                        status: response.status,
-                        statusText: response.statusText,
-                        headers: newHeaders,
-                    });
-                })
-                .catch((e) => console.error(e))
-        );
-    });
+    // 不再攔截任何請求：沒有 fetch 監聽器，所有連線都會照原樣直接送出，
+    // Google 登入與 Firestore 就不會再被改寫標頭而失敗。
 
 } else {
-    (() => {
-        const reloadedBySelf = window.sessionStorage.getItem("coiReloadedBySelf");
-        window.sessionStorage.removeItem("coiReloadedBySelf");
-        const coepDegrading = (reloadedBySelf == "coepdegrade");
-
-        // You can customize the behavior of this script through a global `coi` variable.
-        const coi = {
-            shouldRegister: () => !reloadedBySelf,
-            shouldDeregister: () => false,
-            coepCredentialless: () => true,
-            coepDegrade: () => true,
-            doReload: () => window.location.reload(),
-            quiet: false,
-            ...window.coi
-        };
-
-        const n = navigator;
-        const controlling = n.serviceWorker && n.serviceWorker.controller;
-
-        // Record the failure if the page is served by serviceWorker.
-        if (controlling && !window.crossOriginIsolated) {
-            window.sessionStorage.setItem("coiCoepHasFailed", "true");
-        }
-        const coepHasFailed = window.sessionStorage.getItem("coiCoepHasFailed");
-
-        if (controlling) {
-            // Reload only on the first failure.
-            const reloadToDegrade = coi.coepDegrade() && !(
-                coepDegrading || window.crossOriginIsolated
-            );
-            n.serviceWorker.controller.postMessage({
-                type: "coepCredentialless",
-                value: (reloadToDegrade || coepHasFailed && coi.coepDegrade())
-                    ? false
-                    : coi.coepCredentialless(),
-            });
-            if (reloadToDegrade) {
-                !coi.quiet && console.log("Reloading page to degrade COEP.");
-                window.sessionStorage.setItem("coiReloadedBySelf", "coepdegrade");
-                coi.doReload("coepdegrade");
-            }
-
-            if (coi.shouldDeregister()) {
-                n.serviceWorker.controller.postMessage({ type: "deregister" });
-            }
-        }
-
-        // If we're already coi: do nothing. Perhaps it's due to this script doing its job, or COOP/COEP are
-        // already set from the origin server. Also if the browser has no notion of crossOriginIsolated, just give up here.
-        if (window.crossOriginIsolated !== false || !coi.shouldRegister()) return;
-
-        if (!window.isSecureContext) {
-            !coi.quiet && console.log("COOP/COEP Service Worker not registered, a secure context is required.");
-            return;
-        }
-
-        // In some environments (e.g. Firefox private mode) this won't be available
-        if (!n.serviceWorker) {
-            !coi.quiet && console.error("COOP/COEP Service Worker not registered, perhaps due to private mode.");
-            return;
-        }
-
-        n.serviceWorker.register(window.document.currentScript.src).then(
-            (registration) => {
-                !coi.quiet && console.log("COOP/COEP Service Worker registered", registration.scope);
-
-                registration.addEventListener("updatefound", () => {
-                    !coi.quiet && console.log("Reloading page to make use of updated COOP/COEP Service Worker.");
-                    window.sessionStorage.setItem("coiReloadedBySelf", "updatefound");
-                    coi.doReload();
-                });
-
-                // If the registration is active, but it's not controlling the page
-                if (registration.active && !n.serviceWorker.controller) {
-                    !coi.quiet && console.log("Reloading page to make use of COOP/COEP Service Worker.");
-                    window.sessionStorage.setItem("coiReloadedBySelf", "notcontrolling");
-                    coi.doReload();
-                }
-            },
-            (err) => {
-                !coi.quiet && console.error("COOP/COEP Service Worker failed to register:", err);
-            }
-        );
-    })();
+    // 網頁端：如果這個檔案不小心又被載入，主動把所有已註冊的 Service Worker 清掉
+    if (navigator.serviceWorker) {
+        navigator.serviceWorker.getRegistrations().then((registrations) => {
+            registrations.forEach((registration) => registration.unregister());
+        }).catch(() => {});
+    }
 }
