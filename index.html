@@ -49,28 +49,39 @@
         .btn-danger { background: none; border: none; color: #c00; cursor: pointer; font-size: 16px; font-weight: bold; }
         .btn-danger-solid { background-color: #c0392b; color: white; border: none; border-radius: 4px; cursor: pointer; padding: 8px 16px; font-weight: bold; }
 
-        /* 登入畫面 */
-        #loginScreen {
-            position: fixed; inset: 0; background: #f9f9f9; z-index: 2000;
-            display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 18px;
+        /* 右上角登入列 / 使用者頭像 */
+        .app-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+        .app-header h2 { margin: 0; }
+        .auth-area { display: flex; align-items: center; gap: 10px; background: #f1f1f1; border-radius: 22px; padding: 6px 8px 6px 16px; }
+        .auth-hint { font-size: 13px; color: #555; }
+        .auth-hint.error { color: #c0392b; font-weight: bold; }
+        .login-btn {
+            background: #2c662d; color: white; border: none; border-radius: 16px;
+            padding: 7px 16px; font-size: 13px; font-weight: bold; cursor: pointer; white-space: nowrap;
         }
-        #loginScreen .login-box {
-            background: white; padding: 40px 48px; border-radius: 10px; box-shadow: 0 2px 16px rgba(0,0,0,0.12);
-            text-align: center; max-width: 360px;
+        .login-btn:hover { background: #234e24; }
+        .user-avatar {
+            width: 34px; height: 34px; border-radius: 50%; cursor: pointer; border: 2px solid #fff;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.25); background: #4a6fa5; color: white;
+            display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 15px;
+            overflow: hidden; flex-shrink: 0;
         }
-        #loginScreen h2 { margin-top: 0; }
-        #loginScreen .login-btn {
-            display: inline-flex; align-items: center; gap: 10px; background: white; color: #444;
-            border: 1px solid #ccc; border-radius: 6px; padding: 10px 20px; font-size: 15px; font-weight: bold;
-            cursor: pointer; margin-top: 10px;
+        .user-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .auth-menu {
+            position: absolute; right: 0; top: 46px; background: white; border: 1px solid #ddd; border-radius: 8px;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.15); padding: 12px 14px; min-width: 220px; z-index: 500;
+            display: flex; flex-direction: column; gap: 8px;
         }
-        #loginScreen .login-btn:hover { background: #f5f5f5; }
-        #loginScreen .login-status { font-size: 13px; color: #666; min-height: 18px; }
-        #loginScreen .login-status.error { color: #c0392b; font-weight: bold; }
-        #userBar {
-            display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 13px; color: #555;
+        .auth-menu .menu-email { font-size: 13px; color: #333; word-break: break-all; }
+        .auth-wrap { position: relative; }
+
+        /* 需要登入才能看的頁籤，未登入時顯示的提示 */
+        .auth-notice {
+            background: #fff8e5; border: 1px solid #f0d9a0; border-radius: 8px;
+            padding: 28px 24px; text-align: center; color: #7a5c14; margin-top: 10px;
         }
-        #userBar button { padding: 5px 12px; font-size: 12px; }
+        .auth-notice strong { display: block; font-size: 16px; margin-bottom: 6px; }
+        .auth-notice .login-btn { margin-top: 14px; }
         .btn-danger-solid:hover { background-color: #992d22; }
 
         /* 頁籤一：專案人員分配表 (比照 Excel 的緊湊列高/欄寬) */
@@ -233,22 +244,22 @@
     </style>
 </head>
 <body>
-    <!-- 登入畫面：沒登入、或登入的帳號不在白名單裡，就只會看到這個畫面，看不到底下任何資料 -->
-    <div id="loginScreen">
-        <div class="login-box">
+    <div class="container" id="appRoot">
+        <div class="app-header">
             <h2>美術組多功能平台</h2>
-            <p class="help-text" style="margin-bottom:0;">請使用 Google 帳號登入</p>
-            <button id="googleLoginBtn" class="login-btn">🔑 使用 Google 帳號登入</button>
-            <div id="loginStatus" class="login-status"></div>
+            <div class="auth-wrap">
+                <div class="auth-area">
+                    <!-- 未登入時顯示提示與登入按鈕；登入後改顯示頭像 -->
+                    <span class="auth-hint" id="authHint">請先登入</span>
+                    <button id="googleLoginBtn" class="login-btn">Google 登入</button>
+                    <div class="user-avatar" id="userAvatar" style="display:none;"></div>
+                </div>
+                <div class="auth-menu" id="authMenu" style="display:none;">
+                    <div class="menu-email" id="userEmailLabel"></div>
+                    <button id="logoutBtn" class="btn-secondary">登出</button>
+                </div>
+            </div>
         </div>
-    </div>
-
-    <div class="container" id="appRoot" style="display:none;">
-        <div id="userBar">
-            <span id="userEmailLabel"></span>
-            <button id="logoutBtn" class="btn-secondary">登出</button>
-        </div>
-        <h2>美術組多功能平台</h2>
 
         <div class="tab-bar">
             <button class="tab-btn active" data-tab="assign">📋 美術組工作分配表</button>

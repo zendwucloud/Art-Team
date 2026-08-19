@@ -21,35 +21,93 @@ const googleProvider = new GoogleAuthProvider();
 document.addEventListener('DOMContentLoaded', () => {
 
     /* =========================================================
-       登入畫面 / Google 帳號驗證
-       規則：Firestore 安全規則只允許「已登入 + email 在 allowedUsers 白名單」的人讀寫資料，
-       這裡的邏輯負責顯示登入畫面、處理登入/登出，以及在「登入了但不在白名單」時給出清楚的提示。
+       登入 / Google 帳號驗證
+       設計：整個平台一律可以進入，四個工具頁籤(圖片壓縮、影片壓縮、AI 放大、AI 去背)
+       不需要登入就能使用；只有前三頁(工作分配表、工時試算表、專案執行進度表)
+       牽涉到雲端資料，必須登入而且 email 在 allowedUsers 白名單裡才看得到。
     ========================================================= */
-    const loginScreen = document.getElementById('loginScreen');
-    const appRoot = document.getElementById('appRoot');
     const googleLoginBtn = document.getElementById('googleLoginBtn');
-    const loginStatus = document.getElementById('loginStatus');
-    const logoutBtn = document.getElementById('logoutBtn');
+    const authHint = document.getElementById('authHint');
+    const userAvatar = document.getElementById('userAvatar');
+    const authMenu = document.getElementById('authMenu');
     const userEmailLabel = document.getElementById('userEmailLabel');
+    const logoutBtn = document.getElementById('logoutBtn');
 
-    let appStarted = false; // startApp() 只應該真正執行一次，避免重複登入/登出時重複掛上一堆監聽器
+    // 這三個頁籤的內容需要登入才能看
+    const AUTH_REQUIRED_TABS = ['assign', 'estimate', 'status'];
 
-    googleLoginBtn.addEventListener('click', () => {
-        loginStatus.textContent = '正在導向 Google 登入頁面...';
-        loginStatus.classList.remove('error');
+    let appStarted = false;      // startApp() 只跑一次
+    let subscribeData = null;    // startApp() 裡會把「開始接收雲端資料」的函式指定給它
+    let unsubscribeData = null;  // onSnapshot 回傳的取消訂閱函式，登出時用
+    let dataSubscribed = false;
+
+    // 把每個需要登入的頁籤，原本的內容包進一層 wrapper，並在前面插入一段「請先登入」提示，
+    // 之後只要切換這兩者的顯示狀態就好，不會動到內部元素原有的 display 設定。
+    function prepareAuthGates() {
+        AUTH_REQUIRED_TABS.forEach(tab => {
+            const page = document.getElementById('page-' + tab);
+            if (!page || page.querySelector('.auth-content-wrap')) return;
+
+            const wrap = document.createElement('div');
+            wrap.className = 'auth-content-wrap';
+            while (page.firstChild) wrap.appendChild(page.firstChild);
+
+            const notice = document.createElement('div');
+            notice.className = 'auth-notice';
+            notice.innerHTML = `
+                <strong>🔒 這個頁面需要登入才能查看</strong>
+                請使用公司核發的 Google 帳號登入。<br>
+                如果登入後仍然看不到內容，代表你的帳號還沒被加入白名單，請聯絡管理者。
+                <div><button class="login-btn auth-notice-login">Google 登入</button></div>
+            `;
+            notice.querySelector('.auth-notice-login').addEventListener('click', doLogin);
+
+            page.appendChild(notice);
+            page.appendChild(wrap);
+        });
+    }
+
+    function setAuthGates(isLoggedIn) {
+        AUTH_REQUIRED_TABS.forEach(tab => {
+            const page = document.getElementById('page-' + tab);
+            if (!page) return;
+            const wrap = page.querySelector('.auth-content-wrap');
+            const notice = page.querySelector('.auth-notice');
+            if (wrap) wrap.style.display = isLoggedIn ? '' : 'none';
+            if (notice) notice.style.display = isLoggedIn ? 'none' : 'block';
+        });
+    }
+
+    function doLogin() {
+        authHint.textContent = '正在導向 Google...';
+        authHint.classList.remove('error');
         signInWithRedirect(auth, googleProvider);
-        // 這裡會直接整頁跳轉離開，登入完成後跳回本頁時，
-        // 下面的 getRedirectResult() 跟 onAuthStateChanged 會接手處理後續。
-    });
+    }
+
+    googleLoginBtn.addEventListener('click', doLogin);
 
     getRedirectResult(auth).catch((err) => {
         console.error('Google 登入失敗：', err);
-        loginStatus.textContent = '登入失敗，請再試一次。';
-        loginStatus.classList.add('error');
+        authHint.textContent = '登入失敗，請再試一次';
+        authHint.classList.add('error');
     });
 
-    logoutBtn.addEventListener('click', () => {
-        signOut(auth);
+    // 點頭像開合小選單
+    userAvatar.addEventListener('click', (e) => {
+        e.stopPropagation();
+        authMenu.style.display = authMenu.style.display === 'none' ? 'flex' : 'none';
+    });
+    document.addEventListener('click', () => { authMenu.style.display = 'none'; });
+    authMenu.addEventListener('click', (e) => e.stopPropagation());
+
+    logoutBtn.addEventListener('click', async () => {
+        authMenu.style.display = 'none';
+        if (unsubscribeData) {
+            unsubscribeData();
+            unsubscribeData = null;
+            dataSubscribed = false;
+        }
+        await signOut(auth);
     });
 
     // 主動確認這個帳號有沒有讀取資料的權限(也就是有沒有在 allowedUsers 白名單裡)。
@@ -60,42 +118,71 @@ document.addEventListener('DOMContentLoaded', () => {
             return true;
         } catch (err) {
             if (err && err.code === 'permission-denied') return false;
-            // 其他錯誤(例如暫時的網路問題)不當成沒權限，先放行，避免誤踢使用者
             console.error('確認權限時發生非權限類的錯誤：', err);
-            return true;
+            return true; // 網路等暫時性問題不當成沒權限，避免誤擋
         }
+    }
+
+    function showLoggedOutUI() {
+        authHint.style.display = '';
+        googleLoginBtn.style.display = '';
+        userAvatar.style.display = 'none';
+        authMenu.style.display = 'none';
+        setAuthGates(false);
+    }
+
+    function showLoggedInUI(user) {
+        authHint.style.display = 'none';
+        authHint.classList.remove('error');
+        googleLoginBtn.style.display = 'none';
+        userAvatar.style.display = 'flex';
+        userEmailLabel.textContent = user.email || '';
+        if (user.photoURL) {
+            userAvatar.innerHTML = `<img src="${user.photoURL}" alt="">`;
+        } else {
+            userAvatar.textContent = (user.displayName || user.email || '?').charAt(0).toUpperCase();
+        }
+        setAuthGates(true);
     }
 
     onAuthStateChanged(auth, async (user) => {
         if (!user) {
-            appRoot.style.display = 'none';
-            loginScreen.style.display = 'flex';
+            showLoggedOutUI();
             return;
         }
 
-        loginStatus.textContent = '登入成功，正在確認使用權限...';
-        loginStatus.classList.remove('error');
+        authHint.textContent = '確認權限中...';
+        authHint.classList.remove('error');
 
         const allowed = await verifyAccess();
         if (!allowed) {
-            loginStatus.textContent = `這個帳號(${user.email})沒有使用權限，請聯絡管理者把你的 email 加進白名單。`;
-            loginStatus.classList.add('error');
+            authHint.textContent = `${user.email} 沒有權限`;
+            authHint.classList.add('error');
+            authHint.style.display = '';
+            googleLoginBtn.style.display = '';
+            userAvatar.style.display = 'none';
+            setAuthGates(false);
             await signOut(auth);
             return;
         }
 
-        loginStatus.textContent = '';
-        userEmailLabel.textContent = user.email || '';
-        loginScreen.style.display = 'none';
-        appRoot.style.display = 'block';
+        showLoggedInUI(user);
 
-        if (!appStarted) {
-            appStarted = true;
-            startApp();
+        // 通過驗證後才開始接收雲端資料
+        if (subscribeData && !dataSubscribed) {
+            dataSubscribed = true;
+            unsubscribeData = subscribeData();
         }
     });
 
-    // 底下是原本整個平台的邏輯，包成一個函式，只有登入成功才會執行
+    // 平台本身立刻啟動(四個工具不需要登入就能用)，前三頁的內容則由上面的驗證流程控制顯示
+    prepareAuthGates();
+    setAuthGates(false);
+    if (!appStarted) {
+        appStarted = true;
+        startApp();
+    }
+
     function startApp() {
 
     /* =========================================================
@@ -113,7 +200,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    onSnapshot(docRef, (docSnap) => {
+    // 不在這裡直接訂閱，而是把訂閱動作交給外層的登入流程，
+    // 確認「已登入且在白名單裡」之後才開始接收雲端資料，避免未登入時一直被規則擋下報錯。
+    subscribeData = () => onSnapshot(docRef, (docSnap) => {
         if (docSnap.exists()) {
             const data = docSnap.data();
             allProjects = data.projects || {};
@@ -146,10 +235,6 @@ document.addEventListener('DOMContentLoaded', () => {
         renderAssignPage();
         renderStatusPage();
     }, (error) => {
-        // 讀取失敗時只記錄，不要在這裡自動登出。
-        // 原因：登入成功的瞬間，這個即時監聽有可能還沒帶著最新的驗證狀態就先送出請求，
-        // 因而收到一次 permission-denied，如果一收到就登出，會把「其實有權限的人」直接踢回登入畫面。
-        // 真正的白名單判斷改由下面 onAuthStateChanged 裡的 verifyAccess() 主動確認一次，比較可靠。
         console.error('讀取雲端資料失敗：', error);
     });
 
