@@ -1,6 +1,7 @@
 import config from './config.js';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCDZDO6BbOiXsWT2KU0b92qJpUYq3aeA1M",
@@ -14,8 +15,61 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const docRef = doc(db, 'scheduler', 'multiProjectsData');
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
 
 document.addEventListener('DOMContentLoaded', () => {
+
+    /* =========================================================
+       登入畫面 / Google 帳號驗證
+       規則：Firestore 安全規則只允許「已登入 + email 在 allowedUsers 白名單」的人讀寫資料，
+       這裡的邏輯負責顯示登入畫面、處理登入/登出，以及在「登入了但不在白名單」時給出清楚的提示。
+    ========================================================= */
+    const loginScreen = document.getElementById('loginScreen');
+    const appRoot = document.getElementById('appRoot');
+    const googleLoginBtn = document.getElementById('googleLoginBtn');
+    const loginStatus = document.getElementById('loginStatus');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const userEmailLabel = document.getElementById('userEmailLabel');
+
+    let appStarted = false; // startApp() 只應該真正執行一次，避免重複登入/登出時重複掛上一堆監聽器
+
+    googleLoginBtn.addEventListener('click', async () => {
+        loginStatus.textContent = '登入中...';
+        loginStatus.classList.remove('error');
+        try {
+            await signInWithPopup(auth, googleProvider);
+            // 登入成功後，下面的 onAuthStateChanged 會接手判斷白名單、顯示主畫面
+        } catch (err) {
+            console.error('登入失敗：', err);
+            loginStatus.textContent = '登入失敗，請再試一次。';
+            loginStatus.classList.add('error');
+        }
+    });
+
+    logoutBtn.addEventListener('click', () => {
+        signOut(auth);
+    });
+
+    onAuthStateChanged(auth, (user) => {
+        if (!user) {
+            appRoot.style.display = 'none';
+            loginScreen.style.display = 'flex';
+            return;
+        }
+
+        userEmailLabel.textContent = user.email || '';
+        loginScreen.style.display = 'none';
+        appRoot.style.display = 'block';
+
+        if (!appStarted) {
+            appStarted = true;
+            startApp();
+        }
+    });
+
+    // 底下是原本整個平台的邏輯，包成一個函式，只有登入成功才會執行
+    function startApp() {
 
     /* =========================================================
        共用狀態 / Firebase 存取
@@ -64,6 +118,14 @@ document.addEventListener('DOMContentLoaded', () => {
         renderEstimatePage();
         renderAssignPage();
         renderStatusPage();
+    }, (error) => {
+        // 這裡會抓到「已登入，但 email 不在 allowedUsers 白名單裡」被 Firestore 規則擋下的情況(permission-denied)。
+        console.error('讀取雲端資料失敗：', error);
+        if (error.code === 'permission-denied' && auth.currentUser) {
+            loginStatus.textContent = `這個帳號(${auth.currentUser.email})沒有使用權限，請聯絡管理者把你的 email 加進白名單。`;
+            loginStatus.classList.add('error');
+            signOut(auth);
+        }
     });
 
     /* =========================================================
@@ -2674,4 +2736,6 @@ document.addEventListener('DOMContentLoaded', () => {
             bgremoveDownloadAllBtn.textContent = '📦 打包下載全部(ZIP)';
         }
     });
+
+    } // startApp() 結束
 });

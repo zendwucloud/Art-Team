@@ -1,0 +1,20 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 白名單清單：只有你在 Firebase 主控台的「資料」分頁手動維護，
+    // 前端網頁完全不能讀寫這個集合(下面沒有針對 allowedUsers 開任何 allow，
+    // 沒被任何規則允許 = 預設拒絕，所以不用寫 allow: if false 也一樣安全，
+    // 這裡寫出來只是方便閱讀、明確表達意圖)。
+    match /allowedUsers/{email} {
+      allow read, write: if false;
+    }
+
+    // 主要資料(排班表/工時試算/分配表)：
+    // 必須「已登入」而且「登入的 email 在 allowedUsers 白名單裡」才能讀寫。
+    match /scheduler/{docId} {
+      allow read, write: if request.auth != null
+        && exists(/databases/$(database)/documents/allowedUsers/$(request.auth.token.email.lower()));
+    }
+  }
+}

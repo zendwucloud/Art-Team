@@ -48,6 +48,29 @@
         .btn-secondary:hover { background-color: #385780; }
         .btn-danger { background: none; border: none; color: #c00; cursor: pointer; font-size: 16px; font-weight: bold; }
         .btn-danger-solid { background-color: #c0392b; color: white; border: none; border-radius: 4px; cursor: pointer; padding: 8px 16px; font-weight: bold; }
+
+        /* 登入畫面 */
+        #loginScreen {
+            position: fixed; inset: 0; background: #f9f9f9; z-index: 2000;
+            display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 18px;
+        }
+        #loginScreen .login-box {
+            background: white; padding: 40px 48px; border-radius: 10px; box-shadow: 0 2px 16px rgba(0,0,0,0.12);
+            text-align: center; max-width: 360px;
+        }
+        #loginScreen h2 { margin-top: 0; }
+        #loginScreen .login-btn {
+            display: inline-flex; align-items: center; gap: 10px; background: white; color: #444;
+            border: 1px solid #ccc; border-radius: 6px; padding: 10px 20px; font-size: 15px; font-weight: bold;
+            cursor: pointer; margin-top: 10px;
+        }
+        #loginScreen .login-btn:hover { background: #f5f5f5; }
+        #loginScreen .login-status { font-size: 13px; color: #666; min-height: 18px; }
+        #loginScreen .login-status.error { color: #c0392b; font-weight: bold; }
+        #userBar {
+            display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 13px; color: #555;
+        }
+        #userBar button { padding: 5px 12px; font-size: 12px; }
         .btn-danger-solid:hover { background-color: #992d22; }
 
         /* 頁籤一：專案人員分配表 (比照 Excel 的緊湊列高/欄寬) */
@@ -210,7 +233,21 @@
     </style>
 </head>
 <body>
-    <div class="container">
+    <!-- 登入畫面：沒登入、或登入的帳號不在白名單裡，就只會看到這個畫面，看不到底下任何資料 -->
+    <div id="loginScreen">
+        <div class="login-box">
+            <h2>美術組多功能平台</h2>
+            <p class="help-text" style="margin-bottom:0;">請使用 Google 帳號登入</p>
+            <button id="googleLoginBtn" class="login-btn">🔑 使用 Google 帳號登入</button>
+            <div id="loginStatus" class="login-status"></div>
+        </div>
+    </div>
+
+    <div class="container" id="appRoot" style="display:none;">
+        <div id="userBar">
+            <span id="userEmailLabel"></span>
+            <button id="logoutBtn" class="btn-secondary">登出</button>
+        </div>
         <h2>美術組多功能平台</h2>
 
         <div class="tab-bar">
