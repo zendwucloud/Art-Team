@@ -339,11 +339,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // 依專案名稱開頭的關鍵字分類分色，並取出名稱中的數字供排序使用
     const platformGroups = [
         { key: 'YGR', test: /^YGR/i, color: '#C9DAF8' },   // 藍
-        { key: 'POP', test: /^POP/i, color: '#ead5ee' },   // 紅紫
+        { key: 'POP', test: /^POP/i, color: '#eedcf1' },   // 紅紫
         { key: '888', test: /^888/i, color: '#D0E0E3' },   // 青
         { key: 'APEX', test: /^APEX/i, color: '#FCE5CD' }, // 橘
         { key: 'A+', test: /^A\+/i, color: '#F4CCCC' },    // 粉紅
-        { key: 'Stake', test: /^Stake/i, color: '#d6cbff' },    // 藍紫
+        { key: 'Stake', test: /^Stake/i, color: '#cfcaff' },    // 藍紫
     ];
     const otherGroupColor = '#E2E2E2'; // 其他(不符合以上關鍵字的專案，例如美術圖庫)
 
