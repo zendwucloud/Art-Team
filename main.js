@@ -275,6 +275,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ========================================================= */
     const assignTableHeader = document.getElementById('assignTableHeader');
     const assignTableBody = document.getElementById('assignTableBody');
+    const assignTableScroll = document.getElementById('assignTableScroll');
+    const platformLegend = document.getElementById('platformLegend');
     const addRowBtn = document.getElementById('addRowBtn');
     const toggleImportBtn = document.getElementById('toggleImportBtn');
     const importPanel = document.getElementById('importPanel');
@@ -282,6 +284,33 @@ document.addEventListener('DOMContentLoaded', () => {
     const importConfirmBtn = document.getElementById('importConfirmBtn');
     const importCancelBtn = document.getElementById('importCancelBtn');
     const deleteRowsBtn = document.getElementById('deleteRowsBtn');
+
+    // 點平台圖例(YGR / POP / 888 / APEX / A+ / Stake / 其他)，跳到該平台在表格裡的第一列。
+    // 因為 getSortedRows() 本來就已經照平台分組排序好了，同一平台的列一定是連續的，
+    // 只要找到「第一個符合這個平台」的 <tr>，把它捲動到可視範圍內就好。
+    if (platformLegend) {
+        platformLegend.addEventListener('click', (e) => {
+            const target = e.target.closest('.platform-jump');
+            if (!target) return;
+
+            const key = target.dataset.platformKey;
+            const targetRow = assignTableBody.querySelector(`tr[data-platform-key="${key}"]`);
+            if (!targetRow) {
+                alert('目前列表裡沒有這個平台的專案。');
+                return;
+            }
+
+            // 表頭是 sticky 的，直接用 scrollIntoView 會被表頭蓋住一小截，
+            // 所以改成手動計算捲動位置，扣掉表頭高度再捲，確保目標列剛好落在表頭下方。
+            const headerHeight = assignTableHeader.parentElement.offsetHeight;
+            const scrollTarget = targetRow.offsetTop - headerHeight;
+            assignTableScroll.scrollTo({ top: Math.max(0, scrollTarget), behavior: 'smooth' });
+
+            // 短暫閃一下黃色底色，讓使用者一眼看到跳到哪裡了
+            targetRow.classList.add('row-jump-highlight');
+            setTimeout(() => targetRow.classList.remove('row-jump-highlight'), 1200);
+        });
+    }
 
     // 頁籤一「美術組工作分配表」目前被勾選(準備刪除)的列，存 row.id，重新渲染時要保留這個狀態
     let selectedAssignRowIds = new Set();
@@ -422,6 +451,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         getSortedRows().forEach(row => {
             const tr = document.createElement('tr');
+            tr.dataset.platformKey = getPlatformGroup(row.projectName).key;
             if (selectedAssignRowIds.has(row.id)) tr.classList.add('row-selected');
 
             // 勾選欄(取代原本的 ✕ 刪除按鈕)

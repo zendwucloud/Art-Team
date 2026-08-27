@@ -115,6 +115,12 @@
         .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
         .legend span.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 5px; vertical-align: middle; border: 1px solid #bbb; }
         .platform-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; }
+        .platform-legend .platform-jump { cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: background 0.15s; }
+        .platform-legend .platform-jump:hover { background: #eef2f7; }
+        .platform-legend .platform-jump.jump-flash { animation: jumpFlash 1s ease; }
+        @keyframes jumpFlash { 0% { background: #ffe58a; } 100% { background: transparent; } }
+        #assignTable tbody tr.row-jump-highlight td { animation: rowJumpFlash 1.2s ease; }
+        @keyframes rowJumpFlash { 0% { background-color: #fff2a8; } 100% { background-color: transparent; } }
 
         /* 表格捲動容器：橫向拉桿固定在這個容器底部，不用捲到整個頁面最下面 */
         .table-scroll { max-height: 66vh; overflow: auto; border: 1px solid #ddd; border-radius: 4px; }
@@ -279,15 +285,15 @@
                 <span><span class="swatch" style="background:#d2deff"></span>廣宣</span>
                 <span><span class="swatch" style="background:#D9D2E9"></span>其他/特殊</span>
             </div>
-            <div class="legend platform-legend">
-                <span><span class="swatch" style="background:#C9DAF8"></span>YGR</span>
-                <span><span class="swatch" style="background:#eedcf1"></span>POP</span>
-                <span><span class="swatch" style="background:#D0E0E3"></span>888</span>
-                <span><span class="swatch" style="background:#FCE5CD"></span>APEX</span>
-                <span><span class="swatch" style="background:#F4CCCC"></span>A+</span>
-                <span><span class="swatch" style="background:#cfcaff"></span>Stake</span>
-                <span><span class="swatch" style="background:#E2E2E2"></span>其他</span>
-                <span class="help-text" style="margin:0;">(專案名稱欄依開頭關鍵字自動分色，並依名稱中的數字自動排序)</span>
+            <div class="legend platform-legend" id="platformLegend">
+                <span class="platform-jump" data-platform-key="YGR"><span class="swatch" style="background:#C9DAF8"></span>YGR</span>
+                <span class="platform-jump" data-platform-key="POP"><span class="swatch" style="background:#eedcf1"></span>POP</span>
+                <span class="platform-jump" data-platform-key="888"><span class="swatch" style="background:#D0E0E3"></span>888</span>
+                <span class="platform-jump" data-platform-key="APEX"><span class="swatch" style="background:#FCE5CD"></span>APEX</span>
+                <span class="platform-jump" data-platform-key="A+"><span class="swatch" style="background:#F4CCCC"></span>A+</span>
+                <span class="platform-jump" data-platform-key="Stake"><span class="swatch" style="background:#cfcaff"></span>Stake</span>
+                <span class="platform-jump" data-platform-key="OTHER"><span class="swatch" style="background:#E2E2E2"></span>其他</span>
+                <span class="help-text" style="margin:0;">(專案名稱欄依開頭關鍵字自動分色，並依名稱中的數字自動排序；點上面的色塊可以直接跳到該平台的區塊)</span>
             </div>
             <div class="assign-toolbar">
                 <button id="addRowBtn" class="btn-primary">+ 新增專案列</button>
@@ -305,7 +311,7 @@
                     <button id="importCancelBtn" class="btn-secondary">取消</button>
                 </div>
             </div>
-            <div class="table-scroll">
+            <div class="table-scroll" id="assignTableScroll">
                 <table id="assignTable">
                     <thead><tr id="assignTableHeader"></tr></thead>
                     <tbody id="assignTableBody"></tbody>
