@@ -16,6 +16,9 @@ const config = {
     { label: "5折 (50%)", value: 0.5 }
   ],
 
+  // 豆豆、嫌嫌、柳橙、無尾熊(已離職)合併成「離職設定」這一欄，
+  // 另外新增「離職後製」欄，讓以前分配給離職同仁的舊專案工時可以統一歸到這兩欄底下，
+  // 完成度直接設 100%(這兩欄的資料搬遷是 main.js 裡自動一次性執行的，不用手動一筆筆改)。
   personnel: [
     { name: "阿榮", status: "active" },
     { name: "可樂", status: "active" },
@@ -28,10 +31,8 @@ const config = {
     { name: "欣儀", status: "active" },
     { name: "逸筠", status: "active" },
     { name: "佩可", status: "active" },
-    { name: "豆豆", status: "inactive" },
-    { name: "嫌嫌", status: "inactive" },
-    { name: "柳橙", status: "inactive" },
-    { name: "無尾熊", status: "inactive" }
+    { name: "離職設定", status: "active" },
+    { name: "離職後製", status: "active" }
   ],
 
   // ===== 頁籤二「工時試算表」用的分類與顏色 =====

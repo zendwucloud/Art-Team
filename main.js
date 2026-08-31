@@ -1,6 +1,6 @@
 import config from './config.js';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, setDoc, updateDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
@@ -214,10 +214,40 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentProjectName = "預設專案";
 
     async function saveData() {
+        // 保留給「一次動到好幾個區塊」的情況用(例如舊資料搬遷、新增/改名專案時要同步分配表)，
+        // 平常個別編輯請改用下面對應的 save 函式，只寫入真正變動的那一塊，降低跟別人互相覆蓋的機會。
         try {
             await setDoc(docRef, { projects: allProjects, assignmentSheet, weeklyReport });
         } catch (error) {
             console.error("雲端儲存失敗：", error);
+        }
+    }
+
+    // 下面三個函式各自只更新雲端文件裡對應的那一個欄位(用 updateDoc，不會動到其他欄位)，
+    // 這樣兩個人同時分別編輯「工時試算表」跟「週進度報告」之類不同頁籤時，不會互相蓋掉對方的變更。
+    // 唯一還是可能互相覆蓋的情況，是「兩個人幾乎同時編輯同一頁籤」，這種機率小很多，
+    // 真的要完全杜絕的話需要更大幅度的資料庫改動(例如把每筆資料拆成獨立文件)，先用這個方式大幅降低問題再看情況。
+    async function saveProjects() {
+        try {
+            await updateDoc(docRef, { projects: allProjects });
+        } catch (error) {
+            console.error("雲端儲存失敗(工時試算表)：", error);
+        }
+    }
+
+    async function saveAssignmentSheet() {
+        try {
+            await updateDoc(docRef, { assignmentSheet });
+        } catch (error) {
+            console.error("雲端儲存失敗(工作分配表)：", error);
+        }
+    }
+
+    async function saveWeeklyReport() {
+        try {
+            await updateDoc(docRef, { weeklyReport });
+        } catch (error) {
+            console.error("雲端儲存失敗(週進度報告)：", error);
         }
     }
 
@@ -251,6 +281,38 @@ document.addEventListener('DOMContentLoaded', () => {
         assignmentSheet.rows.forEach(row => {
             if (!row.statusMeta) row.statusMeta = {};
         });
+
+        // 一次性資料搬遷：把「豆豆、嫌嫌、柳橙、無尾熊」(已離職)這四欄的舊資料，
+        // 合併搬進新的「離職設定」「離職後製」兩欄，並把完成度設成 100%(這些都是舊專案，不會再變動了)。
+        // 這段程式碼是「冪等」的：搬過一次之後，這四個舊欄位在資料裡就不存在了，之後每次載入這裡都不會再做任何事，
+        // 留著也不會有副作用，不用之後特地移除。
+        const OLD_DEPARTED_NAMES = ['豆豆', '嫌嫌', '柳橙', '無尾熊'];
+        let migrated = false;
+        assignmentSheet.rows.forEach(row => {
+            OLD_DEPARTED_NAMES.forEach(oldName => {
+                const roleText = (row.cells && row.cells[oldName] || '').trim();
+                if (!roleText) {
+                    // 就算沒有角色文字，也把可能殘留的空白欄位/狀態清掉，保持資料乾淨
+                    if (row.cells && oldName in row.cells) delete row.cells[oldName];
+                    if (row.statusMeta && oldName in row.statusMeta) delete row.statusMeta[oldName];
+                    return;
+                }
+
+                // 依角色關鍵字決定併入哪一欄：含「後製動畫」的併入「離職後製」，其餘(含「前製設定」或其他)併入「離職設定」
+                const targetName = roleText.includes('後製動畫') ? '離職後製' : '離職設定';
+
+                const existing = (row.cells[targetName] || '').trim();
+                row.cells[targetName] = existing && existing !== roleText ? `${existing},${roleText}` : roleText;
+
+                if (!row.statusMeta[targetName]) row.statusMeta[targetName] = { status: '準時', completion: 0 };
+                row.statusMeta[targetName].completion = 100;
+
+                delete row.cells[oldName];
+                delete row.statusMeta[oldName];
+                migrated = true;
+            });
+        });
+        if (migrated) needsSave = true;
 
         if (needsSave) {
             saveData();
@@ -431,7 +493,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (textarea.value.trim() === '' && week.isVirtual) return;
                     const realWeek = week.isVirtual ? promoteVirtualWeek(week.date) : week;
                     realWeek.cells[person] = textarea.value;
-                    saveData();
+                    saveWeeklyReport();
                     if (week.isVirtual) {
                         week.isVirtual = false; // 避免使用者連續在同一列打好幾欄時，後面欄位又重複升格一次
                     }
@@ -451,7 +513,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const lastDate = stored.length > 0 ? keyToDate(stored[stored.length - 1].date) : new Date();
         const newWeek = makeBlankWeek(dateToKey(nextFriday(lastDate)));
         weeklyReport.weeks.push(newWeek);
-        saveData();
+        saveWeeklyReport();
         renderWeeklyPage();
     });
 
@@ -527,7 +589,7 @@ document.addEventListener('DOMContentLoaded', () => {
             importedCount++;
         });
 
-        saveData();
+        saveWeeklyReport();
         renderWeeklyPage();
         weeklyImportPanel.style.display = 'none';
         weeklyImportText.value = '';
@@ -540,14 +602,14 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         weeklyReport.collapseBeforeDate = weeklyCollapseDate.value;
-        saveData();
+        saveWeeklyReport();
         renderWeeklyPage();
     });
 
     weeklyCollapseClearBtn.addEventListener('click', () => {
         weeklyReport.collapseBeforeDate = null;
         weeklyCollapseDate.value = '';
-        saveData();
+        saveWeeklyReport();
         renderWeeklyPage();
     });
 
@@ -788,7 +850,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 input.addEventListener('change', () => {
                     row.cells[p.name] = input.value.trim();
-                    saveData();
+                    saveAssignmentSheet();
                 });
                 td.appendChild(input);
                 tr.appendChild(td);
@@ -811,7 +873,7 @@ document.addEventListener('DOMContentLoaded', () => {
         input.addEventListener('input', () => autosizeInput(input));
         input.addEventListener('change', () => {
             row[field] = input.value;
-            saveData();
+            saveAssignmentSheet();
         });
         td.appendChild(input);
         return td;
@@ -832,7 +894,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // 將這筆新資料推入分配表陣列中並存檔
         assignmentSheet.rows.push(newRow);
-        saveData();
+        saveAssignmentSheet();
     });
 
     deleteRowsBtn.addEventListener('click', () => {
@@ -847,7 +909,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         assignmentSheet.rows = assignmentSheet.rows.filter(r => !selectedAssignRowIds.has(r.id));
         selectedAssignRowIds.clear();
-        saveData();
+        saveAssignmentSheet();
     });
 
     toggleImportBtn.addEventListener('click', () => {
@@ -878,7 +940,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         assignmentSheet.rows = assignmentSheet.rows.concat(newRows);
-        saveData();
+        saveAssignmentSheet();
         importText.value = '';
         importPanel.style.display = 'none';
     });
@@ -1134,7 +1196,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     allProjects[currentProjectName].assignments[task] = { qty: 1 };
                 }
                 allProjects[currentProjectName].assignments[task].qty = parseFloat(e.target.value) || 0;
-                saveData();
+                saveProjects();
             });
         });
     }
@@ -1142,7 +1204,7 @@ document.addEventListener('DOMContentLoaded', () => {
     discountSelect.addEventListener('change', (e) => {
         if (allProjects[currentProjectName]) {
             allProjects[currentProjectName].discountTier = parseFloat(e.target.value);
-            saveData();
+            saveProjects();
         } else {
             renderEstimatePage();
         }
@@ -1231,7 +1293,7 @@ document.addEventListener('DOMContentLoaded', () => {
             currentProjectName = "預設專案";
             allProjects[currentProjectName] = { discountTier: 1.0, assignments: {} };
         }
-        saveData();
+        saveProjects();
     });
 
     toggleImportBtnEstimate.addEventListener('click', () => {
@@ -1323,7 +1385,7 @@ document.addEventListener('DOMContentLoaded', () => {
             matchedCount++;
         });
 
-        saveData();
+        saveProjects();
         importTextEstimate.value = '';
         importPanelEstimate.style.display = 'none';
 
@@ -1433,7 +1495,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             statusSelect.addEventListener('change', () => {
                 row.statusMeta[selectedPerson].status = statusSelect.value;
-                saveData();
+                saveAssignmentSheet();
             });
             tdStatus.appendChild(statusSelect);
             tr.appendChild(tdStatus);
@@ -1451,7 +1513,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 val = Math.max(0, Math.min(100, val));
                 completionInput.value = val;
                 row.statusMeta[selectedPerson].completion = val;
-                saveData();
+                saveAssignmentSheet();
             });
             tdCompletion.appendChild(completionInput);
             tdCompletion.appendChild(document.createTextNode(' %'));
@@ -1578,7 +1640,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     completion,
                     status: completionToStatusLabel(completion)
                 };
-            });
+            })
+            .filter(item => item.completion < 100); // 完成度 100% 的項目已經做完，待辦事項只留還沒完成的
     }
 
     function renderDigestTodoTable() {
@@ -1609,36 +1672,76 @@ document.addEventListener('DOMContentLoaded', () => {
         renderDigestTodoTable();
     }
 
-    digestExportBtn.addEventListener('click', () => {
-        if (typeof XLSX === 'undefined') {
-            alert('匯出功能需要的函式庫載入失敗，請確認 vendor/xlsx/xlsx.full.min.js 是否存在。');
+    digestExportBtn.addEventListener('click', async () => {
+        if (typeof ExcelJS === 'undefined') {
+            alert('匯出功能需要的函式庫載入失敗，請確認 vendor/exceljs/exceljs.min.js 是否存在。');
             return;
         }
 
         const personData = getDigestPersonWeekData();
         const todoRows = getDigestTodoRows();
 
-        const aoa = [];
-        aoa.push(['人員', personData.lastLabel, personData.thisLabel]);
-        personData.people.forEach(person => {
-            aoa.push([person, personData.getCell(person, 'last'), personData.getCell(person, 'this')]);
-        });
-        aoa.push([]);
-        aoa.push([]);
-        aoa.push(['待辦事項', '項目', '項目進度', '狀態']);
-        todoRows.forEach(item => {
-            aoa.push(['', item.name, Math.round(item.completion) / 100, item.status]);
-        });
+        const FONT = { name: '新細明體', size: 14 };
+        const HEADER_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA9D18E' } };
 
-        const ws = XLSX.utils.aoa_to_sheet(aoa);
-        ws['!cols'] = [{ wch: 12 }, { wch: 55 }, { wch: 55 }, { wch: 18 }];
-
+        const wb = new ExcelJS.Workbook();
         const today = new Date();
         const dateStamp = `${today.getFullYear()}${pad2(today.getMonth() + 1)}${pad2(today.getDate())}`;
+        const ws = wb.addWorksheet(dateStamp);
 
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, dateStamp);
-        XLSX.writeFile(wb, `美術組預計工作項目${dateStamp}.xlsx`);
+        // ---- 人員週報表頭(套色 #A9D18E) ----
+        const personHeaderRow = ws.addRow(['人員', personData.lastLabel, personData.thisLabel]);
+        personHeaderRow.eachCell(cell => {
+            cell.fill = HEADER_FILL;
+            cell.font = { ...FONT, bold: true };
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+
+        // ---- 人員週報內容：姓名欄上下左右置中，內容欄靠左上並自動換行 ----
+        personData.people.forEach(person => {
+            const row = ws.addRow([person, personData.getCell(person, 'last'), personData.getCell(person, 'this')]);
+            row.getCell(1).font = FONT;
+            row.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+            [2, 3].forEach(colIdx => {
+                row.getCell(colIdx).font = FONT;
+                row.getCell(colIdx).alignment = { horizontal: 'left', vertical: 'top', wrapText: true };
+            });
+        });
+
+        ws.addRow([]);
+        ws.addRow([]);
+
+        // ---- 待辦事項表頭(同樣套色) ----
+        const todoHeaderRow = ws.addRow(['待辦事項', '項目', '項目進度', '狀態']);
+        todoHeaderRow.eachCell(cell => {
+            cell.fill = HEADER_FILL;
+            cell.font = { ...FONT, bold: true };
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+
+        // ---- 待辦事項內容：項目進度顯示成 0%~100% 並靠左 ----
+        todoRows.forEach(item => {
+            const row = ws.addRow(['', item.name, item.completion / 100, item.status]);
+            row.getCell(2).font = FONT;
+            row.getCell(3).font = FONT;
+            row.getCell(3).numFmt = '0%';
+            row.getCell(3).alignment = { horizontal: 'left', vertical: 'middle' };
+            row.getCell(4).font = FONT;
+            row.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+
+        ws.columns = [{ width: 12 }, { width: 55 }, { width: 55 }, { width: 18 }];
+
+        const buffer = await wb.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `美術組預計工作項目${dateStamp}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
     });
 
     /* =========================================================
