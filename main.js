@@ -34,7 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const logoutBtn = document.getElementById('logoutBtn');
 
     // 這三個頁籤的內容需要登入才能看
-    const AUTH_REQUIRED_TABS = ['assign', 'estimate', 'status'];
+    const AUTH_REQUIRED_TABS = ['weeklyReport', 'assign', 'estimate', 'status', 'digest'];
 
     let appStarted = false;      // startApp() 只跑一次
     let subscribeData = null;    // startApp() 裡會把「開始接收雲端資料」的函式指定給它
@@ -210,11 +210,12 @@ document.addEventListener('DOMContentLoaded', () => {
     ========================================================= */
     let allProjects = {};          // 頁籤二：工時試算表資料
     let assignmentSheet = { rows: [] }; // 頁籤一：專案人員分配表資料
+    let weeklyReport = { weeks: [] };   // 頁籤零：美術組週進度報告資料
     let currentProjectName = "預設專案";
 
     async function saveData() {
         try {
-            await setDoc(docRef, { projects: allProjects, assignmentSheet });
+            await setDoc(docRef, { projects: allProjects, assignmentSheet, weeklyReport });
         } catch (error) {
             console.error("雲端儲存失敗：", error);
         }
@@ -227,6 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = docSnap.data();
             allProjects = data.projects || {};
             assignmentSheet = data.assignmentSheet || { rows: [] };
+            weeklyReport = data.weeklyReport || { weeks: [] };
         }
 
         let needsSave = false;
@@ -239,6 +241,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!assignmentSheet.rows || assignmentSheet.rows.length === 0) {
             assignmentSheet = { rows: [makeBlankRow()] };
             needsSave = true;
+        }
+
+        if (!weeklyReport.weeks) {
+            weeklyReport = { weeks: [] };
         }
 
         // 向下相容：舊資料沒有 statusMeta 欄位的話補一個空物件
@@ -254,6 +260,8 @@ document.addEventListener('DOMContentLoaded', () => {
         renderEstimatePage();
         renderAssignPage();
         renderStatusPage();
+        renderWeeklyPage();
+        renderDigestPage();
     }, (error) => {
         console.error('讀取雲端資料失敗：', error);
     });
@@ -268,6 +276,279 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.classList.add('active');
             document.getElementById(`page-${btn.dataset.tab}`).classList.add('active');
         });
+    });
+
+    /* =========================================================
+       頁籤零：美術組週進度報告
+       比照原本 Excel 週報表：每週一列，每人一欄自由填寫，日期永遠自動往下延伸，不用手動輸入。
+    ========================================================= */
+    const weeklyTableHeader = document.getElementById('weeklyTableHeader');
+    const weeklyTableBody = document.getElementById('weeklyTableBody');
+    const weeklyTableScroll = document.getElementById('weeklyTableScroll');
+    const weeklyAddWeekBtn = document.getElementById('weeklyAddWeekBtn');
+    const weeklyToggleImportBtn = document.getElementById('weeklyToggleImportBtn');
+    const weeklyImportPanel = document.getElementById('weeklyImportPanel');
+    const weeklyImportText = document.getElementById('weeklyImportText');
+    const weeklyImportConfirmBtn = document.getElementById('weeklyImportConfirmBtn');
+    const weeklyImportCancelBtn = document.getElementById('weeklyImportCancelBtn');
+    const weeklyCollapseDate = document.getElementById('weeklyCollapseDate');
+    const weeklyCollapseApplyBtn = document.getElementById('weeklyCollapseApplyBtn');
+    const weeklyCollapseClearBtn = document.getElementById('weeklyCollapseClearBtn');
+    const weeklyCollapseStatus = document.getElementById('weeklyCollapseStatus');
+
+    // 摺疊「某日期以前」的舊資料改成大家共用的設定(存在雲端 weeklyReport.collapseBeforeDate 裡)，
+    // 這樣不只是你自己看到精簡畫面，任何人(包含第一次進來、還沒有任何本機設定的訪客)一開始就會是這個摺疊過的畫面，
+    // 對第一次載入的速度也有幫助。
+
+    // 欄位順序完全比照原本 Excel 週報表，這樣從 Excel 整塊複製貼上時順序才會對得起來
+    const weeklyPersonColumns = ['可樂', '大寶', '溫仔', '昱婷', '寶哥', '欣儀', '逸筠', '安惠', '佩可', '中爺', '阿榮', '(暫)開會備註用'];
+    const WEEKLY_FUTURE_COUNT = 10; // 最後一筆資料之後，永遠自動往下延伸幾個星期五
+
+    function pad2(n) { return String(n).padStart(2, '0'); }
+
+    // 內部一律用 'YYYY-MM-DD' 字串存日期(比較、排序都方便)，避免時區換算問題
+    function dateToKey(d) {
+        return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    }
+    function keyToDate(key) {
+        const [y, m, d] = key.split('-').map(Number);
+        return new Date(y, m - 1, d);
+    }
+    function formatWeeklyDateLabel(key) {
+        const d = keyToDate(key);
+        const weekdayNames = ['日', '一', '二', '三', '四', '五', '六'];
+        return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 週${weekdayNames[d.getDay()]}`;
+    }
+    // 找出「基準日期」之後、且是星期五的下一個日期(如果基準日本身就是星期五，會直接跳到下一週的星期五)
+    function nextFriday(baseDate) {
+        const d = new Date(baseDate);
+        d.setDate(d.getDate() + 1);
+        while (d.getDay() !== 5) d.setDate(d.getDate() + 1);
+        return d;
+    }
+
+    function makeBlankWeek(dateKey) {
+        const cells = {};
+        weeklyPersonColumns.forEach(p => { cells[p] = ''; });
+        return { id: 'week_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), date: dateKey, cells };
+    }
+
+    function getSortedWeeklyWeeks() {
+        return [...(weeklyReport.weeks || [])].sort((a, b) => a.date.localeCompare(b.date));
+    }
+
+    // 算出目前該顯示的完整列表：真正存起來的週 + 自動延伸的 10 個未來星期五(這些延伸列不會存進雲端，
+    // 只有使用者真的動手打字之後，才會在儲存那一刻「升格」成真正的一筆資料)。
+    // 如果有設定摺疊日期，日期較早的「已存在」的週不會被放進結果裡(未來的延伸週不受摺疊影響)。
+    function getWeeklyDisplayRows() {
+        const stored = getSortedWeeklyWeeks();
+        const lastDate = stored.length > 0 ? keyToDate(stored[stored.length - 1].date) : nextFriday(new Date());
+        // 如果連一筆資料都還沒有，讓「今天」也當作候選的起點之一(才不會漏掉本週五)
+        let cursor = stored.length > 0 ? lastDate : new Date(lastDate.getTime() - 7 * 86400000);
+
+        const virtualRows = [];
+        for (let i = 0; i < WEEKLY_FUTURE_COUNT; i++) {
+            cursor = nextFriday(cursor);
+            virtualRows.push({ id: 'virtual_' + dateToKey(cursor), date: dateToKey(cursor), cells: {}, isVirtual: true });
+        }
+
+        let visibleStored = stored;
+        let hiddenCount = 0;
+        if (weeklyReport.collapseBeforeDate) {
+            visibleStored = stored.filter(w => w.date >= weeklyReport.collapseBeforeDate);
+            hiddenCount = stored.length - visibleStored.length;
+        }
+
+        return { rows: [...visibleStored, ...virtualRows], hiddenCount };
+    }
+
+    function renderWeeklyHeader() {
+        weeklyTableHeader.innerHTML = '';
+        const thDate = document.createElement('th');
+        thDate.className = 'weekly-date-header';
+        thDate.textContent = '日期';
+        weeklyTableHeader.appendChild(thDate);
+        weeklyPersonColumns.forEach(p => {
+            const th = document.createElement('th');
+            th.className = 'weekly-person-header';
+            th.textContent = p;
+            weeklyTableHeader.appendChild(th);
+        });
+    }
+
+    // 把某個「延伸中的虛擬週」升格成真正存進雲端的一筆資料(第一次在該週任何一欄打字時觸發)
+    function promoteVirtualWeek(dateKey) {
+        const already = weeklyReport.weeks.find(w => w.date === dateKey);
+        if (already) return already;
+        const week = makeBlankWeek(dateKey);
+        weeklyReport.weeks.push(week);
+        return week;
+    }
+
+    function renderWeeklyPage() {
+        renderWeeklyHeader();
+        weeklyTableBody.innerHTML = '';
+
+        const { rows, hiddenCount } = getWeeklyDisplayRows();
+
+        if (weeklyReport.collapseBeforeDate) {
+            weeklyCollapseStatus.style.display = '';
+            weeklyCollapseStatus.textContent = `📁 已摺疊 ${formatWeeklyDateLabel(weeklyReport.collapseBeforeDate)} 以前的資料，共隱藏 ${hiddenCount} 週(資料都還在，對所有人都是這樣的畫面，按「顯示全部」會恢復成大家都看得到完整列表)。`;
+            weeklyCollapseClearBtn.style.display = '';
+            weeklyCollapseDate.value = weeklyReport.collapseBeforeDate;
+        } else {
+            weeklyCollapseStatus.style.display = 'none';
+            weeklyCollapseClearBtn.style.display = 'none';
+        }
+
+        rows.forEach((week, index) => {
+            const tr = document.createElement('tr');
+            if (index % 2 === 1) tr.classList.add('week-alt');
+            if (week.isVirtual) tr.classList.add('week-virtual');
+
+            const tdDate = document.createElement('td');
+            tdDate.className = 'weekly-date-cell';
+            tdDate.textContent = formatWeeklyDateLabel(week.date);
+            tr.appendChild(tdDate);
+
+            weeklyPersonColumns.forEach(person => {
+                const td = document.createElement('td');
+                td.className = 'weekly-content-cell';
+                const textarea = document.createElement('textarea');
+                textarea.value = week.isVirtual ? '' : (week.cells[person] || '');
+                textarea.rows = 1;
+
+                const autoResize = () => {
+                    textarea.style.height = 'auto';
+                    textarea.style.height = (textarea.scrollHeight) + 'px';
+                };
+
+                textarea.addEventListener('input', autoResize);
+
+                textarea.addEventListener('change', () => {
+                    // 虛擬(還沒存在)的週，只有在使用者真的打了內容才升格成正式資料，
+                    // 避免每次渲染都把 10 個空白未來週塞進雲端資料庫
+                    if (textarea.value.trim() === '' && week.isVirtual) return;
+                    const realWeek = week.isVirtual ? promoteVirtualWeek(week.date) : week;
+                    realWeek.cells[person] = textarea.value;
+                    saveData();
+                    if (week.isVirtual) {
+                        week.isVirtual = false; // 避免使用者連續在同一列打好幾欄時，後面欄位又重複升格一次
+                    }
+                });
+
+                td.appendChild(textarea);
+                tr.appendChild(td);
+                requestAnimationFrame(autoResize);
+            });
+
+            weeklyTableBody.appendChild(tr);
+        });
+    }
+
+    weeklyAddWeekBtn.addEventListener('click', () => {
+        const stored = getSortedWeeklyWeeks();
+        const lastDate = stored.length > 0 ? keyToDate(stored[stored.length - 1].date) : new Date();
+        const newWeek = makeBlankWeek(dateToKey(nextFriday(lastDate)));
+        weeklyReport.weeks.push(newWeek);
+        saveData();
+        renderWeeklyPage();
+    });
+
+    weeklyToggleImportBtn.addEventListener('click', () => {
+        weeklyImportPanel.style.display = weeklyImportPanel.style.display === 'none' ? 'block' : 'none';
+    });
+    weeklyImportCancelBtn.addEventListener('click', () => {
+        weeklyImportPanel.style.display = 'none';
+        weeklyImportText.value = '';
+    });
+
+    // 解析從 Excel 複製出來的內容。跟其他頁籤的匯入不同，這裡每個儲存格內容本身就常常是多行文字，
+    // Excel 複製多行儲存格時會用雙引號把整格包起來(內部的雙引號變成兩個雙引號)，
+    // 所以不能單純按「換行」切分，必須照 TSV/CSV 的引號規則來解析，才不會把一格內的換行誤判成新的一列。
+    function parseExcelPasteWithQuotedNewlines(text) {
+        const rows = [];
+        let row = [];
+        let field = '';
+        let inQuotes = false;
+        let i = 0;
+        while (i < text.length) {
+            const c = text[i];
+            if (inQuotes) {
+                if (c === '"') {
+                    if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+                    inQuotes = false; i++; continue;
+                }
+                field += c; i++; continue;
+            }
+            if (c === '"') { inQuotes = true; i++; continue; }
+            if (c === '\t') { row.push(field); field = ''; i++; continue; }
+            if (c === '\r') { i++; continue; }
+            if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; i++; continue; }
+            field += c; i++; continue;
+        }
+        if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+        return rows.filter(r => r.some(f => f.trim() !== ''));
+    }
+
+    // 從貼上的第一欄文字判斷日期，支援「2026年3月27日 週五」跟「2026/3/27」兩種常見格式
+    function parseWeeklyDateCell(text) {
+        const t = (text || '').trim();
+        let m = t.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+        if (m) return dateToKey(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+        m = t.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+        if (m) return dateToKey(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+        return null;
+    }
+
+    weeklyImportConfirmBtn.addEventListener('click', () => {
+        const raw = weeklyImportText.value;
+        if (!raw.trim()) { alert('請先貼上資料。'); return; }
+
+        const parsedRows = parseExcelPasteWithQuotedNewlines(raw);
+        if (parsedRows.length === 0) { alert('沒有偵測到任何資料，請確認格式。'); return; }
+
+        let importedCount = 0;
+        let skippedCount = 0;
+
+        parsedRows.forEach(cols => {
+            const dateKey = parseWeeklyDateCell(cols[0]);
+            if (!dateKey) { skippedCount++; return; } // 第一欄看不出日期的列(例如不小心貼到表頭)直接跳過
+
+            let week = weeklyReport.weeks.find(w => w.date === dateKey);
+            if (!week) {
+                week = makeBlankWeek(dateKey);
+                weeklyReport.weeks.push(week);
+            }
+            weeklyPersonColumns.forEach((person, idx) => {
+                const value = cols[idx + 1]; // +1 是因為第 0 欄是日期
+                if (value !== undefined) week.cells[person] = value;
+            });
+            importedCount++;
+        });
+
+        saveData();
+        renderWeeklyPage();
+        weeklyImportPanel.style.display = 'none';
+        weeklyImportText.value = '';
+        alert(`匯入完成：成功 ${importedCount} 週${skippedCount > 0 ? `，略過 ${skippedCount} 列(看不出日期)` : ''}。`);
+    });
+
+    weeklyCollapseApplyBtn.addEventListener('click', () => {
+        if (!weeklyCollapseDate.value) {
+            alert('請先選一個日期，會摺疊這個日期以前(不含這天)的週。');
+            return;
+        }
+        weeklyReport.collapseBeforeDate = weeklyCollapseDate.value;
+        saveData();
+        renderWeeklyPage();
+    });
+
+    weeklyCollapseClearBtn.addEventListener('click', () => {
+        weeklyReport.collapseBeforeDate = null;
+        weeklyCollapseDate.value = '';
+        saveData();
+        renderWeeklyPage();
     });
 
     /* =========================================================
@@ -1179,6 +1460,186 @@ document.addEventListener('DOMContentLoaded', () => {
             statusTableBody.appendChild(tr);
         });
     }
+
+    /* =========================================================
+       頁籤四：美術組預計工作項目
+       完全是「即時算出來的檢視畫面」，不另外存資料：
+       - 人員週報：取自頁籤零(週進度報告)最近兩個星期五
+       - 待辦事項：專案清單取自頁籤一(工作分配表)，進度取自頁籤三(專案執行進度表)的前製設定/後製動畫完成度各佔 50%
+    ========================================================= */
+    const digestPersonTableHeader = document.getElementById('digestPersonTableHeader');
+    const digestPersonTableBody = document.getElementById('digestPersonTableBody');
+    const digestTodoTableBody = document.getElementById('digestTodoTableBody');
+    const digestExportBtn = document.getElementById('digestExportBtn');
+
+    // 找出「本週」的星期五(以今天所在的那個星期一~星期五為準)，跟「上週」的星期五(往前推 7 天)
+    function getDigestWeekFridays(baseDate) {
+        const d = new Date(baseDate);
+        const day = d.getDay(); // 0=週日, 1=週一, ..., 6=週六
+        const diffToMonday = (day === 0) ? -6 : (1 - day);
+        const monday = new Date(d);
+        monday.setDate(d.getDate() + diffToMonday);
+        const thisFriday = new Date(monday);
+        thisFriday.setDate(monday.getDate() + 4);
+        const lastFriday = new Date(thisFriday);
+        lastFriday.setDate(thisFriday.getDate() - 7);
+        return { lastFriday, thisFriday };
+    }
+
+    function formatWeekRangeLabel(fridayDate) {
+        const monday = new Date(fridayDate);
+        monday.setDate(fridayDate.getDate() - 4);
+        const fmt = d => `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
+        return `${fmt(monday)}~${fmt(fridayDate)}`;
+    }
+
+    function getDigestPersonWeekData() {
+        const { lastFriday, thisFriday } = getDigestWeekFridays(new Date());
+        const lastKey = dateToKey(lastFriday);
+        const thisKey = dateToKey(thisFriday);
+        const weeks = weeklyReport.weeks || [];
+        const lastWeek = weeks.find(w => w.date === lastKey);
+        const thisWeek = weeks.find(w => w.date === thisKey);
+        const activePeople = config.personnel.filter(p => p.status === 'active').map(p => p.name);
+        return {
+            lastLabel: formatWeekRangeLabel(lastFriday),
+            thisLabel: formatWeekRangeLabel(thisFriday),
+            people: activePeople,
+            getCell: (person, which) => {
+                const week = which === 'last' ? lastWeek : thisWeek;
+                return week ? (week.cells[person] || '') : '';
+            }
+        };
+    }
+
+    function renderDigestPersonTable() {
+        const data = getDigestPersonWeekData();
+
+        digestPersonTableHeader.innerHTML = '';
+        ['人員', `上週\n${data.lastLabel}`, `本週\n${data.thisLabel}`].forEach(label => {
+            const th = document.createElement('th');
+            th.style.whiteSpace = 'pre-line';
+            th.textContent = label;
+            digestPersonTableHeader.appendChild(th);
+        });
+
+        digestPersonTableBody.innerHTML = '';
+        data.people.forEach(person => {
+            const tr = document.createElement('tr');
+
+            const tdName = document.createElement('td');
+            tdName.className = 'digest-person-name';
+            tdName.textContent = person;
+            tr.appendChild(tdName);
+
+            ['last', 'this'].forEach(which => {
+                const td = document.createElement('td');
+                td.className = 'digest-week-cell';
+                td.textContent = data.getCell(person, which);
+                tr.appendChild(td);
+            });
+
+            digestPersonTableBody.appendChild(tr);
+        });
+    }
+
+    // 專案整體完成度 = 前製設定完成度(平均) * 50% + 後製動畫完成度(平均) * 50%
+    // 找不到對應角色的人時，那一半視為 0%(尚未開始)
+    function computeProjectOverallCompletion(row) {
+        const settingCompletions = [];
+        const animationCompletions = [];
+        Object.keys(row.cells || {}).forEach(person => {
+            const roleText = (row.cells[person] || '').trim();
+            if (!roleText) return;
+            const meta = row.statusMeta && row.statusMeta[person];
+            const completion = meta ? (meta.completion || 0) : 0;
+            if (roleText.includes('前製設定')) settingCompletions.push(completion);
+            if (roleText.includes('後製動畫')) animationCompletions.push(completion);
+        });
+        const avg = arr => (arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+        return avg(settingCompletions) * 0.5 + avg(animationCompletions) * 0.5;
+    }
+
+    function completionToStatusLabel(pct) {
+        if (pct >= 100) return '已完成';
+        if (pct >= 96) return 'CP反饋調整中';
+        if (pct >= 91) return '等待與程式對接';
+        if (pct >= 50) return '後製執行中';
+        return '設定執行中';
+    }
+
+    function getDigestTodoRows() {
+        return getSortedRows()
+            .filter(row => (row.projectName || '').trim() !== '')
+            .map(row => {
+                const completion = computeProjectOverallCompletion(row);
+                return {
+                    name: row.projectName.trim(),
+                    completion,
+                    status: completionToStatusLabel(completion)
+                };
+            });
+    }
+
+    function renderDigestTodoTable() {
+        digestTodoTableBody.innerHTML = '';
+        getDigestTodoRows().forEach(item => {
+            const tr = document.createElement('tr');
+
+            const tdName = document.createElement('td');
+            tdName.textContent = item.name;
+            tr.appendChild(tdName);
+
+            const tdProgress = document.createElement('td');
+            tdProgress.className = 'digest-todo-progress';
+            tdProgress.textContent = item.completion.toFixed(0) + '%';
+            tr.appendChild(tdProgress);
+
+            const tdStatus = document.createElement('td');
+            tdStatus.className = 'digest-todo-status';
+            tdStatus.textContent = item.status;
+            tr.appendChild(tdStatus);
+
+            digestTodoTableBody.appendChild(tr);
+        });
+    }
+
+    function renderDigestPage() {
+        renderDigestPersonTable();
+        renderDigestTodoTable();
+    }
+
+    digestExportBtn.addEventListener('click', () => {
+        if (typeof XLSX === 'undefined') {
+            alert('匯出功能需要的函式庫載入失敗，請確認 vendor/xlsx/xlsx.full.min.js 是否存在。');
+            return;
+        }
+
+        const personData = getDigestPersonWeekData();
+        const todoRows = getDigestTodoRows();
+
+        const aoa = [];
+        aoa.push(['人員', personData.lastLabel, personData.thisLabel]);
+        personData.people.forEach(person => {
+            aoa.push([person, personData.getCell(person, 'last'), personData.getCell(person, 'this')]);
+        });
+        aoa.push([]);
+        aoa.push([]);
+        aoa.push(['待辦事項', '項目', '項目進度', '狀態']);
+        todoRows.forEach(item => {
+            aoa.push(['', item.name, Math.round(item.completion) / 100, item.status]);
+        });
+
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = [{ wch: 12 }, { wch: 55 }, { wch: 55 }, { wch: 18 }];
+
+        const today = new Date();
+        const dateStamp = `${today.getFullYear()}${pad2(today.getMonth() + 1)}${pad2(today.getDate())}`;
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, dateStamp);
+        XLSX.writeFile(wb, `美術組預計工作項目${dateStamp}.xlsx`);
+    });
 
     /* =========================================================
        頁籤四：圖片壓縮工具 (純前端，圖片不會上傳到任何地方)

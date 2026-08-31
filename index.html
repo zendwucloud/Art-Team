@@ -112,6 +112,41 @@
         #importPanelEstimate { display: none; margin: 12px 0; padding: 15px; background: #f1f1f1; border-radius: 6px; }
         #importPanelEstimate textarea { width: 100%; height: 120px; box-sizing: border-box; font-family: monospace; font-size: 12px; }
         #importPanelEstimate .help-text { margin-bottom: 8px; }
+        #weeklyImportPanel { display: none; margin-bottom: 15px; padding: 15px; background: #f1f1f1; border-radius: 6px; }
+        #weeklyImportPanel textarea { width: 100%; height: 160px; box-sizing: border-box; font-family: monospace; font-size: 12px; }
+        #weeklyImportPanel .help-text { margin-bottom: 8px; }
+
+        /* 頁籤零：美術組週進度報告，配色比照原本 Excel 週報表 */
+        #weeklyTable { table-layout: fixed; width: max-content; min-width: 100%; }
+        #weeklyTable th, #weeklyTable td { border: 1px solid #ddd; padding: 4px 6px; vertical-align: top; font-size: 13px; }
+        #weeklyTable th.weekly-date-header { background: #F46423; color: white; width: 110px; min-width: 110px; }
+        #weeklyTable th.weekly-person-header { background: #FEF8E2; width: 200px; min-width: 200px; text-align: center; font-weight: bold; }
+        #weeklyTable td.weekly-date-cell {
+            width: 110px; min-width: 110px; text-align: center; font-weight: bold; color: #444;
+            white-space: nowrap; background: white;
+        }
+        #weeklyTable tr.week-alt td.weekly-date-cell,
+        #weeklyTable tr.week-alt td.weekly-content-cell { background: #FFE5DC; }
+        #weeklyTable td.weekly-content-cell { background: white; padding: 0; }
+        #weeklyTable td.weekly-content-cell textarea {
+            width: 100%; min-height: 32px; border: none; background: transparent; resize: vertical;
+            font-family: inherit; font-size: 13px; padding: 4px 6px; box-sizing: border-box; line-height: 1.5;
+            display: block;
+        }
+        #weeklyTable td.weekly-content-cell textarea:focus { outline: 2px solid #4a6fa5; outline-offset: -2px; background: #fffef2; }
+        #weeklyTable tr.week-virtual td.weekly-date-cell { color: #999; font-weight: normal; }
+        #weeklyTable tr.week-virtual { opacity: 0.75; }
+
+        /* 頁籤四：美術組預計工作項目 */
+        #digestPersonTable, #digestTodoTable { table-layout: fixed; width: 100%; }
+        #digestPersonTable th, #digestPersonTable td,
+        #digestTodoTable th, #digestTodoTable td { border: 1px solid #ddd; padding: 6px 8px; vertical-align: top; font-size: 13px; }
+        #digestPersonTable th { background: #FEF8E2; text-align: center; }
+        #digestPersonTable td.digest-person-name { width: 90px; font-weight: bold; text-align: center; background: #FFF6E5; }
+        #digestPersonTable td.digest-week-cell { white-space: pre-wrap; line-height: 1.5; }
+        #digestTodoTable th { background: #FEF8E2; text-align: center; }
+        #digestTodoTable td.digest-todo-progress { text-align: center; }
+        #digestTodoTable td.digest-todo-status { text-align: center; font-weight: bold; }
         .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
         .legend span.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 5px; vertical-align: middle; border: 1px solid #bbb; }
         .platform-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; }
@@ -268,17 +303,55 @@
         </div>
 
         <div class="tab-bar">
-            <button class="tab-btn active" data-tab="assign">📋 美術組工作分配表</button>
+            <button class="tab-btn active" data-tab="weeklyReport">🗓 美術組週進度報告</button>
+            <button class="tab-btn" data-tab="assign">📋 美術組工作分配表</button>
             <button class="tab-btn" data-tab="estimate">📊 美術組工時試算表</button>
             <button class="tab-btn" data-tab="status">👤 美術組專案執行進度表</button>
+            <button class="tab-btn" data-tab="digest">📰 美術組預計工作項目</button>
             <button class="tab-btn" data-tab="compress">🖼 圖片壓縮工具</button>
             <button class="tab-btn" data-tab="videocompress">🎬 影片壓縮工具</button>
             <button class="tab-btn" data-tab="upscale">🔍 AI 圖片放大工具</button>
             <button class="tab-btn" data-tab="bgremove">✂️ AI 去背工具</button>
         </div>
 
+        <!-- 頁籤零：美術組週進度報告(比照 Excel 週報表格式與配色) -->
+        <div id="page-weeklyReport" class="tab-page active">
+            <span class="help-text" style="margin-bottom:10px; display:block;">
+                比照原本 Excel「週進度」報表的欄位與配色，每個人在自己的欄位裡自由填寫當週工作項目(換行、條列符號都可以，跟 Excel 儲存格一樣自由格式)。
+                <strong>日期不用手動填</strong>：永遠自動往下延伸 10 個星期五的日期，時間到了自動出現新的一列。
+            </span>
+            <div class="assign-toolbar">
+                <button id="weeklyAddWeekBtn" class="btn-primary">+ 手動新增一週</button>
+                <button id="weeklyToggleImportBtn" class="btn-secondary">📥 從 Excel 貼上匯入</button>
+                <span style="display:flex; align-items:center; gap:6px; margin-left:10px;">
+                    <label for="weeklyCollapseDate" class="help-text" style="margin:0;">摺疊此日期以前：</label>
+                    <input type="date" id="weeklyCollapseDate">
+                    <button id="weeklyCollapseApplyBtn" class="btn-secondary">摺疊</button>
+                    <button id="weeklyCollapseClearBtn" class="btn-secondary" style="display:none;">顯示全部</button>
+                </span>
+            </div>
+            <span class="help-text" id="weeklyCollapseStatus" style="display:none; margin-bottom:8px;"></span>
+            <div id="weeklyImportPanel">
+                <span class="help-text">
+                    直接從 Excel 選取整塊範圍(第一欄是日期，後面依序是可樂、大寶、溫仔、昱婷、寶哥、欣儀、逸筠、安惠、佩可、中爺、阿榮、(暫)開會備註用)複製後貼在下面。
+                    儲存格內的換行、條列符號都會完整保留。日期相同的週會直接覆蓋更新，不會重複新增。
+                </span>
+                <textarea id="weeklyImportText" placeholder="在這裡貼上從 Excel 複製的資料..."></textarea>
+                <div style="margin-top:8px; display:flex; gap:10px;">
+                    <button id="weeklyImportConfirmBtn" class="btn-primary">匯入</button>
+                    <button id="weeklyImportCancelBtn" class="btn-secondary">取消</button>
+                </div>
+            </div>
+            <div class="table-scroll" id="weeklyTableScroll">
+                <table id="weeklyTable">
+                    <thead><tr id="weeklyTableHeader"></tr></thead>
+                    <tbody id="weeklyTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- 頁籤一：專案人員分配表 -->
-        <div id="page-assign" class="tab-page active">
+        <div id="page-assign" class="tab-page">
             <div class="legend">
                 <span><span class="swatch" style="background:#FCE4D6"></span>前製設定</span>
                 <span><span class="swatch" style="background:#D9EAD3"></span>後製動畫</span>
@@ -419,7 +492,40 @@
             <p id="statusEmptyMsg" class="help-text" style="display:none;">這個人目前在「美術專案工作分配表」裡沒有被指派任何專案。</p>
         </div>
 
-        <!-- 頁籤四：圖片壓縮工具 -->
+        <!-- 頁籤四：美術組預計工作項目(比照週報 Excel 格式，資料全部即時算自前四頁，不用另外維護) -->
+        <div id="page-digest" class="tab-page">
+            <span class="help-text" style="margin-bottom:10px; display:block;">
+                這頁的內容不用自己填，全部即時取自前面幾頁：上半部「人員週報」直接取「美術組週進度報告」裡最近兩個星期五的資料；
+                下半部「待辦事項」的專案清單自動跟著「美術組工作分配表」增減，進度則是依「美術組專案執行進度表」裡前製設定(佔 50%)、後製動畫(佔 50%)兩邊的完成度加權算出來。
+            </span>
+            <div class="assign-toolbar">
+                <button id="digestExportBtn" class="btn-primary">📥 匯出 .xlsx 週進度報告</button>
+            </div>
+
+            <h3 style="margin-top:20px;">人員週報</h3>
+            <div class="table-scroll">
+                <table id="digestPersonTable">
+                    <thead><tr id="digestPersonTableHeader"></tr></thead>
+                    <tbody id="digestPersonTableBody"></tbody>
+                </table>
+            </div>
+
+            <h3 style="margin-top:24px;">待辦事項</h3>
+            <div class="table-scroll">
+                <table id="digestTodoTable">
+                    <thead>
+                        <tr>
+                            <th style="width:280px;">項目</th>
+                            <th style="width:120px;">項目進度</th>
+                            <th style="width:160px;">狀態</th>
+                        </tr>
+                    </thead>
+                    <tbody id="digestTodoTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 頁籤五：圖片壓縮工具 -->
         <div id="page-compress" class="tab-page">
             <span class="help-text" style="margin-bottom:12px; display:block;">
                 所有壓縮都在你自己的瀏覽器裡執行，圖片不會上傳到任何伺服器，關掉分頁就沒了，記得壓縮完要下載。支援 JPG / PNG，可以一次選多張。「PNG 最佳化」選項用的是跟 TinyPNG 相同原理的調色盤壓縮，輸出仍是標準 PNG 格式，沒有張數/月份限制。
@@ -678,6 +784,7 @@
     <script src="./vendor/upscaler/tf.min.js"></script>
     <script src="./vendor/upscaler/upscaler.min.js"></script>
     <script src="./vendor/upscaler/esrgan-thick-x2.min.js"></script>
+    <script src="./vendor/xlsx/xlsx.full.min.js"></script>
     <!--
       去背工具用的 @imgly/background-removal 內部用 import("onnxruntime-web") 這種寫法載入引擎，
       這種「裸模組名稱」在沒有 Webpack/Vite 等打包工具的情況下，瀏覽器不知道要去哪裡找，
