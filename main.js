@@ -337,6 +337,12 @@ document.addEventListener('DOMContentLoaded', () => {
             document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
             btn.classList.add('active');
             document.getElementById(`page-${btn.dataset.tab}`).classList.add('active');
+
+            // 週報頁籤在「看不到」的時候如果被重新渲染過，文字框高度會被量錯(縮成一行)，
+            // 切過來看得到的這一刻，補算一次高度就會恢復正常。
+            if (btn.dataset.tab === 'weeklyReport' && typeof resizeAllWeeklyTextareas === 'function') {
+                requestAnimationFrame(resizeAllWeeklyTextareas);
+            }
         });
     });
 
@@ -447,6 +453,23 @@ document.addEventListener('DOMContentLoaded', () => {
         return week;
     }
 
+    // 把「重新計算所有文字框高度」集中成一個函式：
+    // 1. 渲染完表格的當下如果頁籤剛好是可見的，呼叫它一次
+    // 2. 使用者切換到這個頁籤時，也呼叫它一次(這是真正解決「格子縮起來」的關鍵——
+    //    因為表格在背景被隱藏(display:none)時重建，瀏覽器沒辦法量出正確高度，
+    //    切換過來變成看得到的那一刻，補算一次就對了)
+    function resizeAllWeeklyTextareas() {
+        weeklyTableBody.querySelectorAll('textarea').forEach(ta => {
+            ta.style.height = 'auto';
+            ta.style.height = ta.scrollHeight + 'px';
+        });
+    }
+
+    function isWeeklyReportTabVisible() {
+        const page = document.getElementById('page-weeklyReport');
+        return !!page && page.classList.contains('active');
+    }
+
     function renderWeeklyPage() {
         renderWeeklyHeader();
         weeklyTableBody.innerHTML = '';
@@ -501,11 +524,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 td.appendChild(textarea);
                 tr.appendChild(td);
-                requestAnimationFrame(autoResize);
             });
 
             weeklyTableBody.appendChild(tr);
         });
+
+        // 只有在這個頁籤「當下真的看得到」時，量出來的高度才會是正確的，
+        // 隱藏狀態下重建表格就先不計算，等使用者真的切過來時，靠下面 tab 切換那邊補算。
+        if (isWeeklyReportTabVisible()) {
+            requestAnimationFrame(resizeAllWeeklyTextareas);
+        }
     }
 
     weeklyAddWeekBtn.addEventListener('click', () => {
