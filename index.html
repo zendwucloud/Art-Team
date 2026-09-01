@@ -145,6 +145,8 @@
         #digestPersonTable td.digest-person-name { width: 90px; font-weight: bold; text-align: center; background: #FFF6E5; }
         #digestPersonTable td.digest-week-cell { white-space: pre-wrap; line-height: 1.5; }
         #digestTodoTable th { background: #FEF8E2; text-align: center; }
+        #digestTodoTable th.digest-sortable { cursor: pointer; user-select: none; }
+        #digestTodoTable th.digest-sortable:hover { background: #FCEBB0; }
         #digestTodoTable td.digest-todo-progress { text-align: center; }
         #digestTodoTable td.digest-todo-status { text-align: center; font-weight: bold; }
         .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
@@ -515,8 +517,8 @@
                 <table id="digestTodoTable">
                     <thead>
                         <tr>
-                            <th style="width:280px;">項目</th>
-                            <th style="width:120px;">項目進度</th>
+                            <th id="digestTodoSortByName" style="width:280px;" class="digest-sortable">項目 <span id="digestSortNameIndicator"></span></th>
+                            <th id="digestTodoSortByProgress" style="width:120px;" class="digest-sortable">項目進度 <span id="digestSortProgressIndicator"></span></th>
                             <th style="width:160px;">狀態</th>
                         </tr>
                     </thead>

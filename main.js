@@ -1561,6 +1561,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const digestPersonTableBody = document.getElementById('digestPersonTableBody');
     const digestTodoTableBody = document.getElementById('digestTodoTableBody');
     const digestExportBtn = document.getElementById('digestExportBtn');
+    const digestTodoSortByName = document.getElementById('digestTodoSortByName');
+    const digestTodoSortByProgress = document.getElementById('digestTodoSortByProgress');
+    const digestSortNameIndicator = document.getElementById('digestSortNameIndicator');
+    const digestSortProgressIndicator = document.getElementById('digestSortProgressIndicator');
 
     // 找出「本週」的星期五(以今天所在的那個星期一~星期五為準)，跟「上週」的星期五(往前推 7 天)
     function getDigestWeekFridays(baseDate) {
@@ -1658,9 +1662,12 @@ document.addEventListener('DOMContentLoaded', () => {
         return '設定執行中';
     }
 
+    let digestTodoSortMode = 'name'; // 'name'：依項目名稱現狀排列 | 'progress'：進度高的排上面
+
     function getDigestTodoRows() {
-        return getSortedRows()
+        const rows = getSortedRows()
             .filter(row => (row.projectName || '').trim() !== '')
+            .filter(row => getPlatformGroup(row.projectName).key !== 'OTHER') // 美術圖庫等不屬於固定平台的項目不列入待辦事項
             .map(row => {
                 const completion = computeProjectOverallCompletion(row);
                 return {
@@ -1670,6 +1677,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
             })
             .filter(item => item.completion < 100); // 完成度 100% 的項目已經做完，待辦事項只留還沒完成的
+
+        if (digestTodoSortMode === 'progress') {
+            // 完成度高的排上面；完成度相同時，維持原本(依名稱現狀)的相對順序
+            return rows.slice().sort((a, b) => b.completion - a.completion);
+        }
+        return rows; // getSortedRows() 本身就已經是依專案名稱現狀(平台分類 + 名稱中的數字)排好的順序
     }
 
     function renderDigestTodoTable() {
@@ -1694,6 +1707,25 @@ document.addEventListener('DOMContentLoaded', () => {
             digestTodoTableBody.appendChild(tr);
         });
     }
+
+    function updateDigestSortIndicators() {
+        digestSortNameIndicator.textContent = digestTodoSortMode === 'name' ? '▲' : '';
+        digestSortProgressIndicator.textContent = digestTodoSortMode === 'progress' ? '▼' : '';
+    }
+
+    digestTodoSortByName.addEventListener('click', () => {
+        digestTodoSortMode = 'name';
+        updateDigestSortIndicators();
+        renderDigestTodoTable();
+    });
+
+    digestTodoSortByProgress.addEventListener('click', () => {
+        digestTodoSortMode = 'progress';
+        updateDigestSortIndicators();
+        renderDigestTodoTable();
+    });
+
+    updateDigestSortIndicators();
 
     function renderDigestPage() {
         renderDigestPersonTable();
