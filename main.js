@@ -1654,12 +1654,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return avg(settingCompletions) * 0.5 + avg(animationCompletions) * 0.5;
     }
 
-    function completionToStatusLabel(pct) {
+    function completionToStatusLabel(pctRaw) {
+        // 完成度是好幾個人平均出來的，可能有小數點，先四捨五入成整數再比對區間，避免浮點數誤差卡在邊界上
+        const pct = Math.round(pctRaw);
         if (pct >= 100) return '已完成';
         if (pct >= 96) return 'CP反饋調整中';
         if (pct >= 91) return '等待與程式對接';
-        if (pct >= 50) return '後製執行中';
-        return '設定執行中';
+        if (pct > 50) return '後製執行中';      // 51~90%：後製動畫已經開始做了
+        if (pct === 50) return '等待後製執行';   // 剛好 50%：前製設定做完了，後製動畫還沒開始
+        if (pct >= 46) return '設定待確認';      // 46~49%：前製設定快做完，等確認
+        if (pct <= 0) return '預定項目';         // 0%：還沒開始
+        return '設定執行中';                     // 1~45%：前製設定進行中
     }
 
     let digestTodoSortMode = 'name'; // 'name'：依項目名稱現狀排列 | 'progress'：進度高的排上面
