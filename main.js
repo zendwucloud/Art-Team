@@ -1561,6 +1561,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const digestPersonTableBody = document.getElementById('digestPersonTableBody');
     const digestTodoTableBody = document.getElementById('digestTodoTableBody');
     const digestExportBtn = document.getElementById('digestExportBtn');
+    const digestExportCustomDate = document.getElementById('digestExportCustomDate');
+    const digestExportCustomBtn = document.getElementById('digestExportCustomBtn');
     const digestTodoSortByName = document.getElementById('digestTodoSortByName');
     const digestTodoSortByProgress = document.getElementById('digestTodoSortByProgress');
     const digestSortNameIndicator = document.getElementById('digestSortNameIndicator');
@@ -1587,8 +1589,8 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${fmt(monday)}~${fmt(fridayDate)}`;
     }
 
-    function getDigestPersonWeekData() {
-        const { lastFriday, thisFriday } = getDigestWeekFridays(new Date());
+    function getDigestPersonWeekData(baseDate = new Date()) {
+        const { lastFriday, thisFriday } = getDigestWeekFridays(baseDate);
         const lastKey = dateToKey(lastFriday);
         const thisKey = dateToKey(thisFriday);
         const weeks = weeklyReport.weeks || [];
@@ -1737,21 +1739,20 @@ document.addEventListener('DOMContentLoaded', () => {
         renderDigestTodoTable();
     }
 
-    digestExportBtn.addEventListener('click', async () => {
+    async function exportDigestXlsx(baseDate) {
         if (typeof ExcelJS === 'undefined') {
             alert('匯出功能需要的函式庫載入失敗，請確認 vendor/exceljs/exceljs.min.js 是否存在。');
             return;
         }
 
-        const personData = getDigestPersonWeekData();
+        const personData = getDigestPersonWeekData(baseDate);
         const todoRows = getDigestTodoRows();
 
-        const FONT = { name: '新細明體', size: 14 };
+        const FONT = { name: '新細明體', size: 13 };
         const HEADER_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA9D18E' } };
 
         const wb = new ExcelJS.Workbook();
-        const today = new Date();
-        const dateStamp = `${today.getFullYear()}${pad2(today.getMonth() + 1)}${pad2(today.getDate())}`;
+        const dateStamp = `${baseDate.getFullYear()}${pad2(baseDate.getMonth() + 1)}${pad2(baseDate.getDate())}`;
         const ws = wb.addWorksheet(dateStamp);
 
         // ---- 人員週報表頭(套色 #A9D18E) ----
@@ -1807,6 +1808,19 @@ document.addEventListener('DOMContentLoaded', () => {
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
+    }
+
+    digestExportBtn.addEventListener('click', () => {
+        exportDigestXlsx(new Date());
+    });
+
+    digestExportCustomBtn.addEventListener('click', () => {
+        if (!digestExportCustomDate.value) {
+            alert('請先選一個日期，會抓那個日期所在那週、跟前一週，共兩週的資料匯出。');
+            return;
+        }
+        const [y, m, d] = digestExportCustomDate.value.split('-').map(Number);
+        exportDigestXlsx(new Date(y, m - 1, d));
     });
 
     /* =========================================================
