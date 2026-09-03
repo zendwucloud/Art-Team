@@ -2,19 +2,72 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 白名單清單：只有你在 Firebase 主控台的「資料」分頁手動維護，
-    // 前端網頁完全不能讀寫這個集合(下面沒有針對 allowedUsers 開任何 allow，
-    // 沒被任何規則允許 = 預設拒絕，所以不用寫 allow: if false 也一樣安全，
-    // 這裡寫出來只是方便閱讀、明確表達意圖)。
+    function emailLower() {
+      return request.auth.token.email.lower();
+    }
+
+    // 永久管理者：寫死在規則裡，就算 allowedUsers 裡的資料被誤刪或誤改，
+    // 這兩個帳號永遠視為管理者，不會被鎖在管理功能外面。
+    // ⚠️ config.js 的 permanentAdmins 陣列也有一份一樣的清單(規則檔案沒辦法 import 前端的檔案)，
+    // 以後要增減永久管理者，兩邊都要一起改，不然行為會不一致。
+    function isPermanentAdmin() {
+      return request.auth != null &&
+        emailLower() in ['carlos.wu@yahutech.com', 'zendwucloud@gmail.com'];
+    }
+
+    function hasAccess() {
+      return request.auth != null &&
+        (isPermanentAdmin() ||
+          exists(/databases/$(database)/documents/allowedUsers/$(emailLower())));
+    }
+
+    // 沒有 role 欄位的「舊帳號」(新功能上線前就已經在白名單裡的人)一律視為 editor，
+    // 維持他們原本就有的完整編輯權限，之後管理者可以再手動調整。
+    function myRole() {
+      return isPermanentAdmin()
+        ? 'admin'
+        : (get(/databases/$(database)/documents/allowedUsers/$(emailLower())).data.role != null
+            ? get(/databases/$(database)/documents/allowedUsers/$(emailLower())).data.role
+            : 'editor');
+    }
+
+    function isAdmin() {
+      return hasAccess() && myRole() == 'admin';
+    }
+
+    function isEditorOrAdmin() {
+      return hasAccess() && myRole() != 'viewer';
+    }
+
+    // 白名單清單 / 權限清單：
+    // - 任何已登入的人都可以讀「自己」那一份文件(用來判斷自己的角色、暱稱)。
+    // - 只有管理者可以列出全部使用者、新增/移除使用者、調整權限或暱稱。
+    // - 永久管理者永遠可以寫「自己」那份文件(自我修復用，避免萬一資料被誤刪就回不去了)。
     match /allowedUsers/{email} {
-      allow read, write: if false;
+      allow get: if request.auth != null && (emailLower() == email || isAdmin());
+      allow list: if isAdmin();
+      allow write: if isAdmin() || (isPermanentAdmin() && emailLower() == email);
     }
 
     // 主要資料(排班表/工時試算/分配表)：
-    // 必須「已登入」而且「登入的 email 在 allowedUsers 白名單裡」才能讀寫。
+    // 檢視者(viewer)只能讀，不能寫；編輯者(editor)、管理者(admin)可以讀寫。
     match /scheduler/{docId} {
-      allow read, write: if request.auth != null
-        && exists(/databases/$(database)/documents/allowedUsers/$(request.auth.token.email.lower()));
+      allow read: if hasAccess();
+      allow write: if isEditorOrAdmin();
+    }
+
+    // 修改紀錄(給管理者在「管理」面板裡查看)：
+    // - 已登入的編輯者/管理者，可以新增自己的操作紀錄。
+    // - 未登入的訪客，只能新增「使用了哪個工具、什麼時間」這種極簡匿名事件，
+    //   欄位被嚴格限制成只有 type / tool / timestamp 三個，防止被濫用寫入其他資料。
+    // - 只有管理者能讀取；任何人都不能修改或刪除既有紀錄(避免竄改紀錄)。
+    match /auditLog/{logId} {
+      allow create: if isEditorOrAdmin()
+        || (request.auth == null
+            && request.resource.data.type == 'guestToolUse'
+            && request.resource.data.keys().hasOnly(['type', 'tool', 'timestamp']));
+      allow read: if isAdmin();
+      allow update, delete: if false;
     }
   }
 }

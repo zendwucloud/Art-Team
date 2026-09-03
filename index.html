@@ -277,6 +277,63 @@
         .diag-box { margin: 10px 0; padding: 10px 14px; background: #f1f1f1; border-radius: 6px; font-size: 12px; }
         #videoDiagLine { font-weight: bold; margin-bottom: 4px; }
         #videoDiagLine.ok { color: #2c662d; }
+        /* ===== 權限管理：管理面板 / 角色徽章 / 檢視者鎖定 ===== */
+        #adminPanelBtn { background: #7030A0; }
+        #adminPanelBtn:hover { background: #55247a; }
+        .role-badge { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 12px; font-weight: bold; color: white; white-space: nowrap; }
+        .role-badge.role-viewer { background: #888; }
+        .role-badge.role-editor { background: #2c662d; }
+        .role-badge.role-admin { background: #7030A0; }
+        .admin-modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 1000;
+            display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto;
+        }
+        .admin-modal { background: white; border-radius: 10px; padding: 20px 24px 24px; width: 100%; max-width: 860px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
+        .admin-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .admin-modal-header h3 { margin: 0; }
+        .admin-tab-bar { display: flex; gap: 8px; border-bottom: 2px solid #eee; margin: 14px 0; }
+        .admin-tab-btn { padding: 8px 18px; border: none; background: #eee; cursor: pointer; font-weight: bold; border-radius: 6px 6px 0 0; color: #666; }
+        .admin-tab-btn.active { background: #7030A0; color: white; }
+        .admin-tab-page { display: none; }
+        .admin-tab-page.active { display: block; }
+        .admin-add-user-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; background: #f7f2fb; padding: 10px; border-radius: 6px; }
+        .admin-add-user-row input[type="email"] { flex: 1 1 200px; }
+        .admin-add-user-row input[type="text"] { flex: 1 1 120px; }
+        #adminUserMsg, #adminLogMsg { display: block; margin-bottom: 8px; min-height: 16px; }
+        #adminUserMsg.error, #adminLogMsg.error { color: #c0392b; font-weight: bold; }
+        #adminUserTable, #adminLogTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+        #adminUserTable th, #adminUserTable td, #adminLogTable th, #adminLogTable td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: middle; }
+        #adminUserTable th, #adminLogTable th { background: #f4f4f4; }
+        .admin-locked-note { font-size: 12px; color: #999; }
+        .admin-log-changes { font-size: 12px; color: #555; margin: 0; padding-left: 16px; }
+        .admin-log-changes li { margin-bottom: 2px; }
+        .admin-log-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .nickname-input { width: 100px; }
+
+        /* 檢視者(viewer)鎖定：前五個資料頁籤(週進度報告/工作分配表/工時試算表/執行進度表/預計工作項目)
+           裡的輸入/下拉/按鈕，包含摺疊、顯示全部、匯出、切換專案等功能鍵，一律鎖住不能點，
+           只保留純瀏覽。真正的安全防線在 Firestore Rules，這裡只是避免檢視者誤以為自己能操作。 */
+        body.role-viewer .auth-content-wrap input,
+        body.role-viewer .auth-content-wrap textarea,
+        body.role-viewer .auth-content-wrap select,
+        body.role-viewer .auth-content-wrap button {
+            pointer-events: none !important;
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+        /* 例外：「美術組專案執行進度表」上方的人員篩選鍵只是切換要看誰的資料，不會改到任何內容，
+           所以檢視者也可以正常點選查看每個人的狀態(#personPicker 的 ID 選擇器優先權較高，會蓋掉上面的鎖定)。 */
+        body.role-viewer .auth-content-wrap #personPicker button {
+            pointer-events: auto !important;
+            opacity: 1;
+            cursor: pointer;
+        }
+        body.role-viewer .viewer-mode-note { display: inline-block !important; }
+        .viewer-mode-note {
+            display: none; background: #eef2f7; color: #4a6fa5; font-size: 12px; font-weight: bold;
+            padding: 4px 10px; border-radius: 4px; margin-bottom: 8px;
+        }
+
         #videoDiagLine.bad { color: #c0392b; }
         .diag-box summary { cursor: pointer; color: #4a6fa5; margin-top: 4px; }
         #videoDebugLog {
@@ -295,10 +352,12 @@
                     <!-- 未登入時顯示提示與登入按鈕；登入後改顯示頭像 -->
                     <span class="auth-hint" id="authHint">請先登入</span>
                     <button id="googleLoginBtn" class="login-btn">Google 登入</button>
+                    <button id="adminPanelBtn" class="login-btn" style="display:none;">⚙ 管理</button>
                     <div class="user-avatar" id="userAvatar" style="display:none;"></div>
                 </div>
                 <div class="auth-menu" id="authMenu" style="display:none;">
                     <div class="menu-email" id="userEmailLabel"></div>
+                    <div class="menu-email" id="userRoleLabel"></div>
                     <button id="logoutBtn" class="btn-secondary">登出</button>
                 </div>
             </div>
@@ -780,6 +839,55 @@
                         <button id="bgremoveMultiSkipBtn" class="btn-secondary">跳過這張</button>
                         <button id="bgremoveMultiConfirmBtn" class="btn-primary">✅ 完成，開始去背這張</button>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 權限管理面板(只有 role === 'admin' 才會被打開；顯示/隱藏、資料存取都由 main.js 控制) -->
+    <div id="adminModal" class="admin-modal-overlay" style="display:none;">
+        <div class="admin-modal">
+            <div class="admin-modal-header">
+                <h3>🔐 權限管理</h3>
+                <button id="adminModalCloseBtn" class="btn-danger">✕ 關閉</button>
+            </div>
+            <span class="help-text">管理者可以在這裡用 Email 新增/移除使用者、調整權限與暱稱，並查看修改紀錄。</span>
+
+            <div class="admin-tab-bar">
+                <button class="admin-tab-btn active" data-admin-tab="users">👤 使用者權限</button>
+                <button class="admin-tab-btn" data-admin-tab="log">📜 修改紀錄</button>
+            </div>
+
+            <div id="adminTab-users" class="admin-tab-page active">
+                <div class="admin-add-user-row">
+                    <input type="email" id="adminNewUserEmail" placeholder="輸入 Email，例如 name@company.com">
+                    <input type="text" id="adminNewUserNickname" placeholder="暱稱(選填，例如「阿榮」)">
+                    <select id="adminNewUserRole">
+                        <option value="viewer">檢視者(只能看)</option>
+                        <option value="editor" selected>編輯者(可正常編輯)</option>
+                        <option value="admin">管理者(可管理權限)</option>
+                    </select>
+                    <button id="adminAddUserBtn" class="btn-primary">+ 新增 / 更新使用者</button>
+                </div>
+                <span class="help-text" id="adminUserMsg"></span>
+                <div class="table-scroll">
+                    <table id="adminUserTable">
+                        <thead><tr><th>Email</th><th>暱稱</th><th>權限</th><th style="width:90px;">操作</th></tr></thead>
+                        <tbody id="adminUserTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="adminTab-log" class="admin-tab-page">
+                <div class="admin-log-toolbar">
+                    <button id="adminLogRefreshBtn" class="btn-secondary">🔄 重新整理</button>
+                    <span class="help-text" id="adminLogMsg">顯示最近 200 筆紀錄(含訪客使用工具的匿名紀錄)。</span>
+                </div>
+                <div class="table-scroll">
+                    <table id="adminLogTable">
+                        <thead><tr><th style="width:150px;">時間</th><th style="width:180px;">使用者</th><th style="width:150px;">動作</th><th>詳細內容</th></tr></thead>
+                        <tbody id="adminLogTableBody"></tbody>
+                    </table>
                 </div>
             </div>
         </div>

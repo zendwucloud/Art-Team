@@ -1,4 +1,10 @@
 const config = {
+  // 永久管理者：不管 Firestore 的 allowedUsers 資料被怎麼改，這些帳號永遠視為「管理者」，
+  // 而且在「管理」面板裡無法被移除或降級，避免不小心把自己鎖在管理功能外面。
+  // ⚠️ firestore.rules 裡也寫了一份一模一樣的清單(規則檔案沒辦法 import 這個檔案)，
+  // 兩邊要保持一致；以後要增減永久管理者，記得兩個檔案都要改。
+  permanentAdmins: ["carlos.wu@yahutech.com", "zendwucloud@gmail.com"],
+
   platforms: {
     "YGR": 1.0,
     "POP": 0.8,

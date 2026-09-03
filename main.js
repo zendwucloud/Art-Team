@@ -1,6 +1,9 @@
 import config from './config.js';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, updateDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import {
+    getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
+    collection, addDoc, query, orderBy, limit, onSnapshot, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
@@ -18,6 +21,19 @@ const docRef = doc(db, 'scheduler', 'multiProjectsData');
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
+/* =========================================================
+   權限管理：角色(viewer/editor/admin) + 修改紀錄
+   ========================================================= */
+const allowedUsersCol = collection(db, 'allowedUsers');
+const auditLogCol = collection(db, 'auditLog');
+const PERMANENT_ADMINS = (config.permanentAdmins || []).map(e => e.toLowerCase());
+
+function isPermanentAdmin(email) {
+    return !!email && PERMANENT_ADMINS.includes(email.toLowerCase());
+}
+
+const ROLE_LABELS = { viewer: '檢視者', editor: '編輯者', admin: '管理者' };
+
 document.addEventListener('DOMContentLoaded', () => {
 
     /* =========================================================
@@ -31,7 +47,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const userAvatar = document.getElementById('userAvatar');
     const authMenu = document.getElementById('authMenu');
     const userEmailLabel = document.getElementById('userEmailLabel');
+    const userRoleLabel = document.getElementById('userRoleLabel');
     const logoutBtn = document.getElementById('logoutBtn');
+    const adminPanelBtn = document.getElementById('adminPanelBtn');
 
     // 這三個頁籤的內容需要登入才能看
     const AUTH_REQUIRED_TABS = ['weeklyReport', 'assign', 'estimate', 'status', 'digest'];
@@ -40,6 +58,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let subscribeData = null;    // startApp() 裡會把「開始接收雲端資料」的函式指定給它
     let unsubscribeData = null;  // onSnapshot 回傳的取消訂閱函式，登出時用
     let dataSubscribed = false;
+
+    // 目前登入者的角色資訊。currentUserRole 是 'viewer' / 'editor' / 'admin' 其中之一，
+    // 未登入時是 null。畫面上很多地方(檢視者鎖定、管理鈕顯不顯示)都靠這三個變數判斷。
+    let currentUserEmail = null;
+    let currentUserRole = null;
+    let currentUserNickname = '';
 
     // 把每個需要登入的頁籤，原本的內容包進一層 wrapper，並在前面插入一段「請先登入」提示，
     // 之後只要切換這兩者的顯示狀態就好，不會動到內部元素原有的 display 設定。
@@ -51,6 +75,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const wrap = document.createElement('div');
             wrap.className = 'auth-content-wrap';
             while (page.firstChild) wrap.appendChild(page.firstChild);
+
+            // 檢視者身份時顯示的提示條(平常隱藏，靠 body.role-viewer 的 CSS 規則顯示)
+            const viewerNote = document.createElement('div');
+            viewerNote.className = 'viewer-mode-note';
+            viewerNote.textContent = '👁 你目前是「檢視者」身份，只能瀏覽，無法修改內容。';
+            wrap.insertBefore(viewerNote, wrap.firstChild);
 
             const notice = document.createElement('div');
             notice.className = 'auth-notice';
@@ -130,16 +160,43 @@ document.addEventListener('DOMContentLoaded', () => {
         await signOut(auth);
     });
 
-    // 主動確認這個帳號有沒有讀取資料的權限(也就是有沒有在 allowedUsers 白名單裡)。
-    // 用實際讀一次資料來判斷，比被動等 onSnapshot 報錯可靠，也不會有時間差問題。
-    async function verifyAccess() {
+    // 主動確認這個帳號有沒有權限、角色是什麼、暱稱是什麼。
+    // 直接讀 allowedUsers/{email} 這份文件(Rules 允許任何已登入的人讀「自己」那份)，
+    // 比以前「試讀 scheduler 文件、失敗就當作沒權限」的間接判斷方式更明確，也順便拿到角色與暱稱。
+    // 永久管理者(config.permanentAdmins)一律視為有權限、角色是 admin，就算文件不存在也一樣，
+    // 避免萬一 allowedUsers 資料被誤刪，永久管理者也進不去畫面。
+    async function fetchUserAccess(email) {
+        const permanent = isPermanentAdmin(email);
         try {
-            await getDoc(docRef);
-            return true;
+            const snap = await getDoc(doc(db, 'allowedUsers', email.toLowerCase()));
+            if (!snap.exists()) {
+                return permanent
+                    ? { allowed: true, role: 'admin', nickname: '' }
+                    : { allowed: false, role: null, nickname: '' };
+            }
+            const data = snap.data() || {};
+            // 舊帳號(新增權限功能之前就已經在白名單裡的人)沒有 role 欄位，一律當作 editor，
+            // 維持他們原本就有的完整編輯權限，之後管理者可以再手動調整。
+            const role = permanent ? 'admin' : (data.role || 'editor');
+            return { allowed: true, role, nickname: data.nickname || '' };
         } catch (err) {
-            if (err && err.code === 'permission-denied') return false;
+            if (err && err.code === 'permission-denied') {
+                return permanent
+                    ? { allowed: true, role: 'admin', nickname: '' }
+                    : { allowed: false, role: null, nickname: '' };
+            }
             console.error('確認權限時發生非權限類的錯誤：', err);
-            return true; // 網路等暫時性問題不當成沒權限，避免誤擋
+            return { allowed: true, role: permanent ? 'admin' : 'editor', nickname: '' }; // 網路等暫時性問題不當成沒權限，避免誤擋
+        }
+    }
+
+    // 永久管理者的自我修復：確保雲端的 allowedUsers 文件一定存在、角色一定是 admin。
+    // 一般使用者的 write 會被 Rules 擋下，但永久管理者寫「自己」那份文件永遠被允許。
+    async function healPermanentAdminDoc(email) {
+        try {
+            await setDoc(doc(db, 'allowedUsers', email.toLowerCase()), { role: 'admin' }, { merge: true });
+        } catch (err) {
+            console.warn('永久管理者自我修復角色失敗(不影響本次登入)：', err);
         }
     }
 
@@ -148,20 +205,29 @@ document.addEventListener('DOMContentLoaded', () => {
         googleLoginBtn.style.display = '';
         userAvatar.style.display = 'none';
         authMenu.style.display = 'none';
+        adminPanelBtn.style.display = 'none';
+        document.body.classList.remove('role-viewer');
+        currentUserEmail = null;
+        currentUserRole = null;
+        currentUserNickname = '';
         setAuthGates(false);
     }
 
-    function showLoggedInUI(user) {
+    function showLoggedInUI(user, role, nickname) {
         authHint.style.display = 'none';
         authHint.classList.remove('error');
         googleLoginBtn.style.display = 'none';
         userAvatar.style.display = 'flex';
+        const displayName = nickname || user.displayName || user.email || '?';
         userEmailLabel.textContent = user.email || '';
+        userRoleLabel.innerHTML = `<span class="role-badge role-${role}">${ROLE_LABELS[role] || role}</span>` + (nickname ? ` ${nickname}` : '');
         if (user.photoURL) {
             userAvatar.innerHTML = `<img src="${user.photoURL}" alt="">`;
         } else {
-            userAvatar.textContent = (user.displayName || user.email || '?').charAt(0).toUpperCase();
+            userAvatar.textContent = displayName.charAt(0).toUpperCase();
         }
+        adminPanelBtn.style.display = role === 'admin' ? '' : 'none';
+        document.body.classList.toggle('role-viewer', role === 'viewer');
         setAuthGates(true);
     }
 
@@ -174,19 +240,29 @@ document.addEventListener('DOMContentLoaded', () => {
         authHint.textContent = '確認權限中...';
         authHint.classList.remove('error');
 
-        const allowed = await verifyAccess();
-        if (!allowed) {
+        const access = await fetchUserAccess(user.email || '');
+        if (!access.allowed) {
             authHint.textContent = `${user.email} 沒有權限`;
             authHint.classList.add('error');
             authHint.style.display = '';
             googleLoginBtn.style.display = '';
             userAvatar.style.display = 'none';
+            adminPanelBtn.style.display = 'none';
+            document.body.classList.remove('role-viewer');
             setAuthGates(false);
             await signOut(auth);
             return;
         }
 
-        showLoggedInUI(user);
+        currentUserEmail = (user.email || '').toLowerCase();
+        currentUserRole = access.role;
+        currentUserNickname = access.nickname;
+
+        if (isPermanentAdmin(currentUserEmail)) {
+            healPermanentAdminDoc(currentUserEmail); // 不 await，背景執行就好，不影響登入速度
+        }
+
+        showLoggedInUI(user, access.role, access.nickname);
 
         // 通過驗證後才開始接收雲端資料
         if (subscribeData && !dataSubscribed) {
@@ -194,6 +270,323 @@ document.addEventListener('DOMContentLoaded', () => {
             unsubscribeData = subscribeData();
         }
     });
+
+    /* =========================================================
+       修改紀錄(audit log)：通用逐欄位比對工具
+       設計：不用在每一個編輯的地方各自寫記錄邏輯(這個平台編輯的地方太多了)，
+       而是在真正存檔的那一刻，把「存檔前」跟「存檔後」的資料整包做遞迴比對，
+       自動找出所有真正變動的欄位，記錄「路徑 + 舊值 + 新值」，管理者就能看到
+       「誰、什麼時候、把哪一格從什麼改成什麼」。
+    ========================================================= */
+    function diffValues(oldVal, newVal, path, changes) {
+        if (oldVal === newVal) return;
+        const oldIsObj = oldVal !== null && typeof oldVal === 'object';
+        const newIsObj = newVal !== null && typeof newVal === 'object';
+        if (oldIsObj && newIsObj) {
+            const keys = new Set([...Object.keys(oldVal), ...Object.keys(newVal)]);
+            keys.forEach(k => diffValues(oldVal[k], newVal[k], path ? `${path}.${k}` : String(k), changes));
+            return;
+        }
+        const fmt = v => {
+            if (v === undefined || v === null) return '(空)';
+            if (typeof v === 'object') return JSON.stringify(v);
+            return String(v);
+        };
+        const from = fmt(oldVal), to = fmt(newVal);
+        if (from !== to) changes.push({ path, from, to });
+        if (changes.length > 500) return; // 安全上限，避免極端情況(例如整批貼上匯入)產生過量資料
+    }
+
+    // 把一批變動寫進 auditLog(超過 30 筆只記前 30 筆 + 註明總數，避免單筆紀錄太肥)。
+    async function logChange(section, changes) {
+        if (!changes || changes.length === 0) return;
+        try {
+            await addDoc(auditLogCol, {
+                type: 'edit',
+                section,
+                email: currentUserEmail || '(未知使用者)',
+                nickname: currentUserNickname || '',
+                changeCount: changes.length,
+                changes: changes.slice(0, 30).map(c => ({
+                    path: c.path,
+                    from: c.from.length > 200 ? c.from.slice(0, 200) + '…' : c.from,
+                    to: c.to.length > 200 ? c.to.slice(0, 200) + '…' : c.to
+                })),
+                timestamp: serverTimestamp()
+            });
+        } catch (err) {
+            console.error('寫入修改紀錄失敗(不影響原本的資料儲存)：', err);
+        }
+    }
+
+    // 使用者管理動作(新增/移除使用者、調整權限或暱稱)的紀錄，跟一般資料編輯分開記一種 type，
+    // 方便管理者在「修改紀錄」頁籤一眼看出這是權限異動而不是資料異動。
+    async function logUserManage(action, targetEmail, detail) {
+        try {
+            await addDoc(auditLogCol, {
+                type: 'userManage',
+                action, // 'add' | 'update' | 'remove'
+                targetEmail,
+                detail: detail || '',
+                email: currentUserEmail || '(未知使用者)',
+                nickname: currentUserNickname || '',
+                timestamp: serverTimestamp()
+            });
+        } catch (err) {
+            console.error('寫入權限異動紀錄失敗：', err);
+        }
+    }
+
+    // 訪客(未登入)使用去背/壓縮/放大等工具時，記一筆極簡匿名事件(只有工具名稱+時間，
+    // Rules 也只允許這三個欄位)，讓管理者能大概知道這些公開工具的使用量。
+    async function logGuestToolUse(toolName) {
+        if (currentUserEmail) return; // 已登入的人操作工具不算「訪客」，不重複記
+        try {
+            await addDoc(auditLogCol, { type: 'guestToolUse', tool: toolName, timestamp: serverTimestamp() });
+        } catch (err) {
+            console.warn('訪客工具使用紀錄寫入失敗(不影響工具本身使用)：', err);
+        }
+    }
+    ['compressStartBtn', 'videoStartBtn', 'upscaleStartBtn', 'bgremoveStartBtn'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('click', () => logGuestToolUse(id));
+    });
+
+    /* =========================================================
+       管理面板(只有 role === 'admin' 才看得到「⚙ 管理」鈕)
+       功能：用 Email 新增/移除使用者、調整權限(viewer/editor/admin)與暱稱、查看修改紀錄
+    ========================================================= */
+    function setupAdminPanel() {
+        const modal = document.getElementById('adminModal');
+        const closeBtn = document.getElementById('adminModalCloseBtn');
+        const tabBtns = modal.querySelectorAll('.admin-tab-btn');
+        const tabPages = { users: document.getElementById('adminTab-users'), log: document.getElementById('adminTab-log') };
+        const userMsg = document.getElementById('adminUserMsg');
+        const userTableBody = document.getElementById('adminUserTableBody');
+        const newEmailInput = document.getElementById('adminNewUserEmail');
+        const newNicknameInput = document.getElementById('adminNewUserNickname');
+        const newRoleSelect = document.getElementById('adminNewUserRole');
+        const addUserBtn = document.getElementById('adminAddUserBtn');
+        const logMsg = document.getElementById('adminLogMsg');
+        const logTableBody = document.getElementById('adminLogTableBody');
+        const logRefreshBtn = document.getElementById('adminLogRefreshBtn');
+
+        function openModal() {
+            modal.style.display = 'flex';
+            loadUsers();
+        }
+        function closeModal() { modal.style.display = 'none'; }
+
+        adminPanelBtn.addEventListener('click', openModal);
+        closeBtn.addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                tabBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                Object.entries(tabPages).forEach(([key, page]) => page.classList.toggle('active', key === btn.dataset.adminTab));
+                if (btn.dataset.adminTab === 'log') loadLog();
+            });
+        });
+
+        function escapeHtml(str) {
+            return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        async function loadUsers() {
+            userMsg.textContent = '載入中...';
+            userMsg.classList.remove('error');
+            userTableBody.innerHTML = '';
+            try {
+                const snap = await getDocs(allowedUsersCol);
+                const rows = [];
+                snap.forEach(d => rows.push({ email: d.id, ...d.data() }));
+                // 永久管理者排最前面，其餘依 email 排序
+                rows.sort((a, b) => {
+                    const pa = isPermanentAdmin(a.email), pb = isPermanentAdmin(b.email);
+                    if (pa !== pb) return pa ? -1 : 1;
+                    return a.email.localeCompare(b.email);
+                });
+                userMsg.textContent = `共 ${rows.length} 位使用者`;
+                rows.forEach(row => renderUserRow(row));
+            } catch (err) {
+                console.error('載入使用者名單失敗：', err);
+                userMsg.textContent = '載入失敗，請確認自己是管理者身份後再試一次';
+                userMsg.classList.add('error');
+            }
+        }
+
+        function renderUserRow(row) {
+            const permanent = isPermanentAdmin(row.email);
+            const role = permanent ? 'admin' : (row.role || 'editor');
+            const tr = document.createElement('tr');
+
+            const tdEmail = document.createElement('td');
+            tdEmail.textContent = row.email;
+            tr.appendChild(tdEmail);
+
+            const tdNickname = document.createElement('td');
+            const nicknameInput = document.createElement('input');
+            nicknameInput.type = 'text';
+            nicknameInput.className = 'nickname-input';
+            nicknameInput.value = row.nickname || '';
+            nicknameInput.placeholder = '(未設定)';
+            nicknameInput.addEventListener('change', async () => {
+                try {
+                    await setDoc(doc(db, 'allowedUsers', row.email), { nickname: nicknameInput.value.trim() }, { merge: true });
+                    logUserManage('update', row.email, `暱稱改為「${nicknameInput.value.trim()}」`);
+                } catch (err) {
+                    console.error('更新暱稱失敗：', err);
+                    alert('更新暱稱失敗，請確認自己是管理者身份');
+                }
+            });
+            tdNickname.appendChild(nicknameInput);
+            tr.appendChild(tdNickname);
+
+            const tdRole = document.createElement('td');
+            if (permanent) {
+                tdRole.innerHTML = `<span class="role-badge role-admin">管理者</span> <span class="admin-locked-note">(永久管理者)</span>`;
+            } else {
+                const roleSelect = document.createElement('select');
+                ['viewer', 'editor', 'admin'].forEach(r => {
+                    const opt = document.createElement('option');
+                    opt.value = r;
+                    opt.textContent = ROLE_LABELS[r];
+                    if (r === role) opt.selected = true;
+                    roleSelect.appendChild(opt);
+                });
+                roleSelect.addEventListener('change', async () => {
+                    try {
+                        await setDoc(doc(db, 'allowedUsers', row.email), { role: roleSelect.value }, { merge: true });
+                        logUserManage('update', row.email, `權限改為「${ROLE_LABELS[roleSelect.value]}」`);
+                    } catch (err) {
+                        console.error('更新權限失敗：', err);
+                        alert('更新權限失敗，請確認自己是管理者身份');
+                        roleSelect.value = role;
+                    }
+                });
+                tdRole.appendChild(roleSelect);
+            }
+            tr.appendChild(tdRole);
+
+            const tdAction = document.createElement('td');
+            if (permanent) {
+                tdAction.innerHTML = `<span class="admin-locked-note">無法移除</span>`;
+            } else {
+                const delBtn = document.createElement('button');
+                delBtn.className = 'btn-danger-solid';
+                delBtn.textContent = '移除';
+                delBtn.addEventListener('click', async () => {
+                    if (!confirm(`確定要移除 ${row.email} 的存取權限嗎？`)) return;
+                    try {
+                        await deleteDoc(doc(db, 'allowedUsers', row.email));
+                        logUserManage('remove', row.email, '移除使用者');
+                        loadUsers();
+                    } catch (err) {
+                        console.error('移除使用者失敗：', err);
+                        alert('移除使用者失敗，請確認自己是管理者身份');
+                    }
+                });
+                tdAction.appendChild(delBtn);
+            }
+            tr.appendChild(tdAction);
+
+            userTableBody.appendChild(tr);
+        }
+
+        addUserBtn.addEventListener('click', async () => {
+            const email = newEmailInput.value.trim().toLowerCase();
+            const nickname = newNicknameInput.value.trim();
+            const role = newRoleSelect.value;
+            if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
+                userMsg.textContent = '請輸入有效的 Email';
+                userMsg.classList.add('error');
+                return;
+            }
+            try {
+                await setDoc(doc(db, 'allowedUsers', email), { role, nickname }, { merge: true });
+                logUserManage('add', email, `設定為「${ROLE_LABELS[role]}」${nickname ? '，暱稱：' + nickname : ''}`);
+                newEmailInput.value = '';
+                newNicknameInput.value = '';
+                newRoleSelect.value = 'editor';
+                userMsg.classList.remove('error');
+                loadUsers();
+            } catch (err) {
+                console.error('新增使用者失敗：', err);
+                userMsg.textContent = '新增失敗，請確認自己是管理者身份';
+                userMsg.classList.add('error');
+            }
+        });
+
+        function formatTimestamp(ts) {
+            if (!ts || !ts.toDate) return '(處理中)';
+            const d = ts.toDate();
+            return d.toLocaleString('zh-TW', { hour12: false });
+        }
+
+        function describeLogRow(data) {
+            if (data.type === 'guestToolUse') {
+                return { who: '訪客(未登入)', action: '使用工具', detail: data.tool || '' };
+            }
+            if (data.type === 'userManage') {
+                const actionLabel = { add: '新增/更新使用者', update: '調整使用者', remove: '移除使用者' }[data.action] || data.action;
+                const who = (data.nickname ? data.nickname + ' ' : '') + (data.email || '');
+                return { who, action: actionLabel, detail: `${data.targetEmail || ''}：${data.detail || ''}` };
+            }
+            // type === 'edit'
+            const who = (data.nickname ? data.nickname + ' ' : '') + (data.email || '');
+            const changes = data.changes || [];
+            let detailHtml = `編輯了「${data.section || ''}」，共 ${data.changeCount || changes.length} 處變更`;
+            if (changes.length > 0) {
+                const items = changes.map(c => `<li><code>${escapeHtml(c.path)}</code>：${escapeHtml(c.from)} → ${escapeHtml(c.to)}</li>`).join('');
+                const more = (data.changeCount || 0) > changes.length ? `<li>…其餘 ${data.changeCount - changes.length} 筆省略</li>` : '';
+                detailHtml += `<ul class="admin-log-changes">${items}${more}</ul>`;
+            }
+            return { who, action: `編輯了 ${data.section || ''}`, detailHtml };
+        }
+
+        async function loadLog() {
+            logMsg.textContent = '載入中...';
+            logMsg.classList.remove('error');
+            logTableBody.innerHTML = '';
+            try {
+                const q = query(auditLogCol, orderBy('timestamp', 'desc'), limit(200));
+                const snap = await getDocs(q);
+                if (snap.empty) {
+                    logMsg.textContent = '目前還沒有任何紀錄';
+                    return;
+                }
+                logMsg.textContent = `顯示最近 ${snap.size} 筆紀錄`;
+                snap.forEach(d => {
+                    const data = d.data();
+                    const info = describeLogRow(data);
+                    const tr = document.createElement('tr');
+                    const tdTime = document.createElement('td');
+                    tdTime.textContent = formatTimestamp(data.timestamp);
+                    const tdWho = document.createElement('td');
+                    tdWho.textContent = info.who;
+                    const tdAction = document.createElement('td');
+                    tdAction.textContent = info.action;
+                    const tdDetail = document.createElement('td');
+                    if (info.detailHtml) tdDetail.innerHTML = info.detailHtml;
+                    else tdDetail.textContent = info.detail || '';
+                    tr.appendChild(tdTime);
+                    tr.appendChild(tdWho);
+                    tr.appendChild(tdAction);
+                    tr.appendChild(tdDetail);
+                    logTableBody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error('載入修改紀錄失敗：', err);
+                logMsg.textContent = '載入失敗，請確認自己是管理者身份後再試一次';
+                logMsg.classList.add('error');
+            }
+        }
+
+        logRefreshBtn.addEventListener('click', loadLog);
+    }
+    setupAdminPanel();
 
     // 平台本身立刻啟動(四個工具不需要登入就能用)，前三頁的內容則由上面的驗證流程控制顯示
     prepareAuthGates();
@@ -213,11 +606,21 @@ document.addEventListener('DOMContentLoaded', () => {
     let weeklyReport = { weeks: [] };   // 頁籤零：美術組週進度報告資料
     let currentProjectName = "預設專案";
 
+    // 上一次從雲端同步下來、「還沒有本地改動」的資料快照，每次存檔前拿目前資料跟它比對，
+    // 用來產生修改紀錄(誰、把哪一格從什麼改成什麼)。每次 onSnapshot 收到新資料時會更新它。
+    let lastSynced = { projects: {}, assignmentSheet: { rows: [] }, weeklyReport: { weeks: [] } };
+    const cloneState = (v) => JSON.parse(JSON.stringify(v));
+
     async function saveData() {
         // 保留給「一次動到好幾個區塊」的情況用(例如舊資料搬遷、新增/改名專案時要同步分配表)，
         // 平常個別編輯請改用下面對應的 save 函式，只寫入真正變動的那一塊，降低跟別人互相覆蓋的機會。
+        const changes = [];
+        diffValues(lastSynced.projects, allProjects, '工時試算表', changes);
+        diffValues(lastSynced.assignmentSheet, assignmentSheet, '工作分配表', changes);
+        diffValues(lastSynced.weeklyReport, weeklyReport, '週進度報告', changes);
         try {
             await setDoc(docRef, { projects: allProjects, assignmentSheet, weeklyReport });
+            logChange('整批資料同步', changes);
         } catch (error) {
             console.error("雲端儲存失敗：", error);
         }
@@ -227,25 +630,35 @@ document.addEventListener('DOMContentLoaded', () => {
     // 這樣兩個人同時分別編輯「工時試算表」跟「週進度報告」之類不同頁籤時，不會互相蓋掉對方的變更。
     // 唯一還是可能互相覆蓋的情況，是「兩個人幾乎同時編輯同一頁籤」，這種機率小很多，
     // 真的要完全杜絕的話需要更大幅度的資料庫改動(例如把每筆資料拆成獨立文件)，先用這個方式大幅降低問題再看情況。
+    // 存檔前都會先跟 lastSynced 做逐欄位比對，把真正變動的內容記進修改紀錄。
     async function saveProjects() {
+        const changes = [];
+        diffValues(lastSynced.projects, allProjects, '工時試算表', changes);
         try {
             await updateDoc(docRef, { projects: allProjects });
+            logChange('工時試算表', changes);
         } catch (error) {
             console.error("雲端儲存失敗(工時試算表)：", error);
         }
     }
 
     async function saveAssignmentSheet() {
+        const changes = [];
+        diffValues(lastSynced.assignmentSheet, assignmentSheet, '工作分配表', changes);
         try {
             await updateDoc(docRef, { assignmentSheet });
+            logChange('工作分配表', changes);
         } catch (error) {
             console.error("雲端儲存失敗(工作分配表)：", error);
         }
     }
 
     async function saveWeeklyReport() {
+        const changes = [];
+        diffValues(lastSynced.weeklyReport, weeklyReport, '週進度報告', changes);
         try {
             await updateDoc(docRef, { weeklyReport });
+            logChange('週進度報告', changes);
         } catch (error) {
             console.error("雲端儲存失敗(週進度報告)：", error);
         }
@@ -260,6 +673,11 @@ document.addEventListener('DOMContentLoaded', () => {
             assignmentSheet = data.assignmentSheet || { rows: [] };
             weeklyReport = data.weeklyReport || { weeks: [] };
         }
+
+        // 記錄「目前雲端的真實狀態」，做為下一次存檔時比對的基準。
+        // 放在這裡(自動搬遷邏輯之前)，是為了讓下面幾段自動搬遷/補資料如果真的觸發存檔，
+        // 也能被正確比對出「搬遷前 → 搬遷後」的差異，一併寫進修改紀錄。
+        lastSynced = { projects: cloneState(allProjects), assignmentSheet: cloneState(assignmentSheet), weeklyReport: cloneState(weeklyReport) };
 
         let needsSave = false;
 
@@ -1433,8 +1851,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let selectedPerson = null;
 
+    // 「美術組專案執行狀況」的人員篩選鍵、「美術組預計工作項目」的人員週報表，
+    // 都改成照這個資歷順序排(由左到右/由上到下)；沒列在這裡的人(例如「離職設定」「離職後製」)
+    // 排在最後面，順序維持原本 config.personnel 裡的相對順序。
+    const SENIORITY_ORDER = ['阿榮', '中爺', '可樂', '大寶', '寶哥', '欣儀', '逸筠', '佩可', '安惠', '溫仔', '昱婷'];
+    function sortBySeniority(list, nameGetter) {
+        const getName = nameGetter || (x => x);
+        return list.slice().sort((a, b) => {
+            const ia = SENIORITY_ORDER.indexOf(getName(a));
+            const ib = SENIORITY_ORDER.indexOf(getName(b));
+            return (ia === -1 ? SENIORITY_ORDER.length : ia) - (ib === -1 ? SENIORITY_ORDER.length : ib);
+        });
+    }
+
     function renderPersonPicker() {
-        const activePeople = config.personnel.filter(p => p.status === 'active');
+        const activePeople = sortBySeniority(config.personnel.filter(p => p.status === 'active'), p => p.name);
 
         if (!selectedPerson && activePeople.length > 0) {
             selectedPerson = activePeople[0].name;
@@ -1453,14 +1884,32 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 算出某專案在工時試算表裡的目前折數下、含廣宣的總預估工時 (若這個專案還沒建立試算資料則回傳 null)
+    // 算出某專案在工時試算表裡的目前折數下的預估工時，設定/廣宣/動畫分開算。
+    // 廣宣類工項(category === 'promo')的工時算進「廣宣」，其他工項算進「設定」，
+    // 動畫工時照舊(廣宣類工項本來就沒有動畫工時，所以不受影響)。
+    // (若這個專案還沒建立試算資料則回傳 null)
     function getProjectTotalEstimate(projectName) {
         const proj = allProjects[projectName];
         if (!proj) return null;
         const tier = proj.discountTier !== undefined ? proj.discountTier : 1.0;
-        const rows = computeEstimateRows(proj, String(tier));
-        const grandTotal = rows[rows.length - 1]; // 專案開發加總(加上廣宣)
-        return { setting: grandTotal.setting, animation: grandTotal.animation };
+        const tierKey = String(tier);
+        const assignments = proj.assignments || {};
+        let setting = 0, promo = 0, animation = 0;
+        for (const [taskName, taskData] of Object.entries(config.baseTasks)) {
+            const taskInfo = assignments[taskName] || { qty: 1 };
+            const qty = taskInfo.qty !== undefined ? taskInfo.qty : 1;
+            const settingBase = taskData.setting[tierKey] !== undefined ? taskData.setting[tierKey] : 0;
+            const animationBase = taskData.animation[tierKey] !== undefined ? taskData.animation[tierKey] : 0;
+            const settingEstimated = parseFloat((settingBase * qty).toFixed(2));
+            const animationEstimated = parseFloat((animationBase * qty).toFixed(2));
+            if (taskData.category === 'promo') {
+                promo += settingEstimated;
+            } else {
+                setting += settingEstimated;
+            }
+            animation += animationEstimated;
+        }
+        return { setting, promo, animation };
     }
 
     function renderStatusPage() {
@@ -1508,7 +1957,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const tdTotal = document.createElement('td');
             const totalEstimate = getProjectTotalEstimate(row.projectName);
             tdTotal.textContent = totalEstimate
-                ? `設定 ${totalEstimate.setting.toFixed(2)} 天／動畫 ${totalEstimate.animation.toFixed(2)} 天`
+                ? `設定 ${totalEstimate.setting.toFixed(2)} 天／廣宣 ${totalEstimate.promo.toFixed(2)} 天／動畫 ${totalEstimate.animation.toFixed(2)} 天`
                 : '尚未建立試算資料';
             tr.appendChild(tdTotal);
 
@@ -1589,6 +2038,11 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${fmt(monday)}~${fmt(fridayDate)}`;
     }
 
+    // 「美術組預計工作項目」這頁的人員清單不列「離職設定」「離職後製」這兩個彙整用欄位，
+    // 只給還在職、真的需要看每週待辦的人看；但這兩個名稱在別的頁籤(工作分配表、工時試算表)
+    // 還是照舊保留，這裡只影響這一頁的顯示，不動 config.personnel 本身。
+    const DIGEST_EXCLUDED_PEOPLE = ['離職設定', '離職後製'];
+
     function getDigestPersonWeekData(baseDate = new Date()) {
         const { lastFriday, thisFriday } = getDigestWeekFridays(baseDate);
         const lastKey = dateToKey(lastFriday);
@@ -1596,7 +2050,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const weeks = weeklyReport.weeks || [];
         const lastWeek = weeks.find(w => w.date === lastKey);
         const thisWeek = weeks.find(w => w.date === thisKey);
-        const activePeople = config.personnel.filter(p => p.status === 'active').map(p => p.name);
+        const activePeople = sortBySeniority(config.personnel
+            .filter(p => p.status === 'active' && !DIGEST_EXCLUDED_PEOPLE.includes(p.name))
+            .map(p => p.name));
         return {
             lastLabel: formatWeekRangeLabel(lastFriday),
             thisLabel: formatWeekRangeLabel(thisFriday),
@@ -1661,8 +2117,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const pct = Math.round(pctRaw);
         if (pct >= 100) return '已完成';
         if (pct >= 96) return 'CP反饋調整中';
-        if (pct >= 91) return '等待與程式對接';
-        if (pct > 50) return '後製執行中';      // 51~90%：後製動畫已經開始做了
+        if (pct >= 95) return '等待與程式對接';
+        if (pct > 50) return '後製執行中';      // 51~94%：後製動畫已經開始做了
         if (pct === 50) return '等待後製執行';   // 剛好 50%：前製設定做完了，後製動畫還沒開始
         if (pct >= 46) return '設定待確認';      // 46~49%：前製設定快做完，等確認
         if (pct <= 0) return '預定項目';         // 0%：還沒開始
