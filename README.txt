@@ -1,18 +1,27 @@
-這個資料夾放「AI 去背工具」需要的檔案。
+這個資料夾是「AI 去背」工具裡「BiRefNet 精細版」選項要用的模型檔案存放位置。
 
-index.mjs
-    去背引擎的程式碼(已經放好，不用另外下載)。
+首次使用前，請在「有網路」的環境下，於專案資料夾(跟 index.html 同一層)執行一次：
 
-resources.json、models/、onnxruntime-web/ (要另外下載，這裡預設還沒有)
-    AI 模型與 WASM 執行檔，體積較大(依畫質約 45～90MB)，沒有隨專案一起放。
+    node download-birefnet-model.js
 
-第一次使用「AI 去背工具」之前，請先在「有網路」的環境下，
-於專案根目錄(跟 index.html 同一層)執行一次：
+執行完成後，這個資料夾底下會多出：
+  - manifest.json          模型切片的清單(檔名、總大小)
+  - shards/                模型本體，切成好幾片 45MB 以內的檔案
+                            (每一片單獨開啟都是壞的、不能用，一定要靠網站
+                             程式在瀏覽器裡照順序讀回來、重新組成完整的
+                             .onnx 檔案，才能拿去給 onnxruntime-web 使用)
 
-    node download-bgremove-model.js
+下載＋切片完成後，把整個 vendor/birefnet/ 資料夾(含 manifest.json 跟 shards/)
+一起加入 Git、commit、推上 GitHub，網站上的「BiRefNet 精細版」選項就能正常使用了。
+之後除非要換模型或模型有更新，否則不用再重新執行這個腳本。
 
-執行完成後，這個資料夾裡應該會多出 resources.json、models、onnxruntime-web 等檔案，
-之後「AI 去背工具」就會完全離線在瀏覽器裡執行，不會再連網路。
+模型來源：runes/birefnet-lite-webgpu 的 model_fp16.onnx
+        (權重就是 ZhengPeng7/BiRefNet_lite，MIT 授權，可商用)
 
-如果之後想要重新整理環境給別人使用，只要把整個專案資料夾(含這個 vendor/bgremove/
-裡已經下載好的檔案)一起複製過去即可，不需要在新環境再下載一次。
+⚠️ 使用前提：
+   1. 網站使用這個選項時需要「網路連線」(執行引擎 onnxruntime-web 是從 CDN 載入的)
+   2. 瀏覽器要支援 WebGPU(較新的 Chrome / Edge)
+
+   原版的 onnx-community/BiRefNet_lite-ONNX 在瀏覽器裡會因為記憶體不足跑不起來，
+   所以改用社群重寫過圖結構的版本(權重完全一樣，只是能在 WebGPU 上正常執行)。
+   如果你之前用舊版腳本下載過，重新執行一次就會自動覆蓋掉，不用手動清除。

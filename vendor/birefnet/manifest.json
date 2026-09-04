@@ -1,0 +1,10 @@
+{
+  "totalSize": 123224205,
+  "shardCount": 3,
+  "shards": [
+    "birefnet_lite_webgpu_fp16.onnx.part1",
+    "birefnet_lite_webgpu_fp16.onnx.part2",
+    "birefnet_lite_webgpu_fp16.onnx.part3"
+  ],
+  "note": "BiRefNet_lite (fp16) ONNX 模型切片。網站瀏覽器端會照順序把這些切片抓回來、在記憶體裡組回原本的檔案，再交給 onnxruntime-web 使用，切片檔案本身不能單獨開啟或執行。"
+}

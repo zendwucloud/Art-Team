@@ -3640,7 +3640,174 @@ document.addEventListener('DOMContentLoaded', () => {
         return bgremoveModulePromise;
     }
 
+    /* ---------------------------------------------------------
+       BiRefNet(精細版)—— 獨立於上面 @imgly/background-removal 引擎之外的第二套去背管線，
+       只有選到這個選項才會用到，完全不會動到「快速/中等/完整品質」這三個原本的選項。
+       模型：runes/birefnet-lite-webgpu 的 model_fp16.onnx
+             (權重就是 ZhengPeng7/BiRefNet_lite，MIT 授權，開源可商用)。
+       ⚠️ 為什麼不用原版的 onnx-community/BiRefNet_lite-ONNX：那個版本在瀏覽器裡跑不動。
+       BiRefNet 用到 deformable convolution，標準 ONNX 沒有這個運算子，匯出時只好用 GatherND 模擬，
+       而這個模擬會產生好幾百 MB 的暫存張量、同時好幾個並存，直接撐爆瀏覽器 wasm 的 4GB 記憶體上限
+       (就是我們一開始遇到的 std::bad_alloc)。這跟解析度是 1024 還是 512 無關，換小尺寸也救不了。
+       這裡用的版本是社群把「圖結構」重寫過的成果(權重完全沒動，官方驗證輸出與原版一致)，
+       代價是它是為 WebGPU 設計的，所以下面固定用 webgpu 執行，不用 wasm(CPU)。
+       因為超過 GitHub 單一檔案 100MB 的上限，用專案裡的 download-birefnet-model.js
+       事先切成好幾片 45MB 以內的小檔案放在 vendor/birefnet/shards/，
+       瀏覽器端第一次用到這個選項時才會把切片抓回來、在記憶體裡組回原本的模型檔案，
+       交給獨立從 CDN 載入的 onnxruntime-web(WebGPU 版)去跑。
+       ⚠️ 這代表「BiRefNet 精細版」這個選項有兩個前提：需要網路連線(模型權重本身是本機的，
+       但 onnxruntime-web 這個執行引擎是從 CDN 載入的)，而且瀏覽器要支援 WebGPU(較新的 Chrome / Edge)。
+       快速/中等/完整品質這三個原本的選項完全不受影響，沒網路、沒 WebGPU 也照樣能用。
+       ⚠️ 這段是照 BiRefNet 官方公開的前處理/後處理規格寫的(1024x1024、ImageNet 常態化、
+       輸出過 sigmoid 當透明度)，還沒辦法在這邊實際跑過完整流程驗證，
+       第一次用請務必先用一張圖測試結果對不對，有問題請把瀏覽器主控台(F12)的錯誤訊息回報回來。
+    --------------------------------------------------------- */
+    const BIREFNET_INPUT_SIZE = 1024;
+    const BIREFNET_MEAN = [0.485, 0.456, 0.406];
+    const BIREFNET_STD = [0.229, 0.224, 0.225];
+    // ⚠️ 這個選項需要網路連線：vendor/bgremove/onnxruntime-web/ 裡只有 .mjs 檔案、沒有對應的 .wasm 執行檔，
+    // ISNet(快速/中等/完整品質)那三個選項顯然是靠 IMG.LY 自己的機制連到某個地方拿 wasm，細節看不到也不能亂猜，
+    // 所以 BiRefNet 這裡改成完全獨立、從官方 CDN 載入一份版本相符的 onnxruntime-web(JS + wasm 同一個來源，
+    // 版本一定對得上，不會再有檔名兜不起來的問題)。只有選到「BiRefNet 精細版」才會用到這個網址，
+    // 不影響其他三個選項，其他三個選項不管有沒有網路都跟以前一樣。
+    // 用 WebGPU 版的 onnxruntime-web(JSEP build)。BiRefNet 不能用純 CPU(wasm)跑，原因見上面的說明。
+    const ORT_CDN_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/';
+    const ONNXRUNTIME_WEB_CDN_URL = ORT_CDN_BASE + 'ort.webgpu.min.mjs';
+    let birefnetSessionPromise = null;
+
+    // 載入 onnxruntime-web 本體(只做一次)。用 WebGPU 版的 JSEP build：
+    // 這個版本的 JS 是 default export，而且要另外告訴它去哪裡抓搭配的 .wasm 檔案，
+    // 不設 wasmPaths 的話它會用相對路徑去我們自己的網站上找，一定 404。
+    let ortModulePromise = null;
+    function loadOrt() {
+        if (!ortModulePromise) {
+            ortModulePromise = (async () => {
+                if (!navigator.gpu) {
+                    throw new Error(
+                        '你的瀏覽器不支援 WebGPU，無法使用「BiRefNet 精細版」。' +
+                        '請改用 Chrome 或 Edge 的較新版本，或改選「完整品質/中等品質/快速」這三個選項(它們不需要 WebGPU)。'
+                    );
+                }
+                const mod = await import(ONNXRUNTIME_WEB_CDN_URL);
+                const ort = mod.default || mod;
+                ort.env.wasm.wasmPaths = ORT_CDN_BASE;
+                ort.env.wasm.numThreads = 1; // GitHub Pages 沒有 COOP/COEP 標頭，不能用多執行緒
+                return ort;
+            })().catch(err => {
+                ortModulePromise = null; // 失敗後下次還能重試
+                throw err;
+            });
+        }
+        return ortModulePromise;
+    }
+
+    async function loadBiRefNetSession(onProgress) {
+        if (!birefnetSessionPromise) {
+            birefnetSessionPromise = (async () => {
+                const manifestRes = await fetch('./vendor/birefnet/manifest.json');
+                if (!manifestRes.ok) {
+                    throw new Error(
+                        '找不到 vendor/birefnet/manifest.json。請先在「有網路」的環境下，於專案資料夾執行一次 ' +
+                        'node download-birefnet-model.js 下載並切片模型檔案，完成後把整個 vendor/birefnet/ 資料夾一起放上網站。'
+                    );
+                }
+                const manifest = await manifestRes.json();
+                const buffer = new Uint8Array(manifest.totalSize);
+                let offset = 0;
+                for (let i = 0; i < manifest.shards.length; i++) {
+                    const shardRes = await fetch(`./vendor/birefnet/shards/${manifest.shards[i]}`);
+                    if (!shardRes.ok) throw new Error(`模型切片下載失敗：${manifest.shards[i]}`);
+                    const chunk = new Uint8Array(await shardRes.arrayBuffer());
+                    buffer.set(chunk, offset);
+                    offset += chunk.length;
+                    if (onProgress) onProgress(Math.round(((i + 1) / manifest.shards.length) * 100));
+                }
+                const ort = await loadOrt();
+                return await ort.InferenceSession.create(buffer, { executionProviders: ['webgpu'] });
+            })().catch(err => {
+                birefnetSessionPromise = null; // 失敗的話下次還能重試，不會卡死
+                throw err;
+            });
+        }
+        return birefnetSessionPromise;
+    }
+
+    async function removeBackgroundWithBiRefNet(file, onProgress) {
+        const img = await loadImageFromFile(file);
+        const srcW = img.naturalWidth, srcH = img.naturalHeight;
+        const pixelCount = BIREFNET_INPUT_SIZE * BIREFNET_INPUT_SIZE;
+
+        // 1. 前處理：縮放成 1024x1024，轉成 ImageNet 常態化的 RGB float32 CHW 張量
+        const inCanvas = document.createElement('canvas');
+        inCanvas.width = BIREFNET_INPUT_SIZE;
+        inCanvas.height = BIREFNET_INPUT_SIZE;
+        const inCtx = inCanvas.getContext('2d');
+        inCtx.drawImage(img, 0, 0, BIREFNET_INPUT_SIZE, BIREFNET_INPUT_SIZE);
+        const { data } = inCtx.getImageData(0, 0, BIREFNET_INPUT_SIZE, BIREFNET_INPUT_SIZE);
+        const tensorData = new Float32Array(3 * pixelCount);
+        for (let i = 0; i < pixelCount; i++) {
+            tensorData[i] = (data[i * 4] / 255 - BIREFNET_MEAN[0]) / BIREFNET_STD[0];
+            tensorData[pixelCount + i] = (data[i * 4 + 1] / 255 - BIREFNET_MEAN[1]) / BIREFNET_STD[1];
+            tensorData[pixelCount * 2 + i] = (data[i * 4 + 2] / 255 - BIREFNET_MEAN[2]) / BIREFNET_STD[2];
+        }
+        if (onProgress) onProgress(10);
+
+        const session = await loadBiRefNetSession(pct => onProgress && onProgress(10 + Math.round(pct * 0.5)));
+        if (onProgress) onProgress(65);
+
+        // 2. 推論：輸入/輸出的張量名稱直接從模型本身讀出來，不寫死猜測的名字，
+        //    避免不同來源的 BiRefNet ONNX 匯出檔案命名不一致而跑不動。
+        const ort = await loadOrt();
+        const inputName = session.inputNames[0];
+        const outputName = session.outputNames[0];
+        const tensor = new ort.Tensor('float32', tensorData, [1, 3, BIREFNET_INPUT_SIZE, BIREFNET_INPUT_SIZE]);
+        const results = await session.run({ [inputName]: tensor });
+        if (onProgress) onProgress(85);
+
+        // 3. 後處理：模型輸出是遮罩的 logits(還沒過 sigmoid)，手動過 sigmoid 轉成 0~1，
+        //    再把 1024x1024 的遮罩縮放回原圖尺寸，當成透明度(alpha)疊回原圖
+        const outData = results[outputName].data;
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = BIREFNET_INPUT_SIZE;
+        maskCanvas.height = BIREFNET_INPUT_SIZE;
+        const maskCtx = maskCanvas.getContext('2d');
+        const maskImageData = maskCtx.createImageData(BIREFNET_INPUT_SIZE, BIREFNET_INPUT_SIZE);
+        for (let i = 0; i < pixelCount; i++) {
+            const alpha = Math.round((1 / (1 + Math.exp(-outData[i]))) * 255); // sigmoid
+            maskImageData.data[i * 4] = 255;
+            maskImageData.data[i * 4 + 1] = 255;
+            maskImageData.data[i * 4 + 2] = 255;
+            maskImageData.data[i * 4 + 3] = alpha;
+        }
+        maskCtx.putImageData(maskImageData, 0, 0);
+
+        const scaledMaskCanvas = document.createElement('canvas');
+        scaledMaskCanvas.width = srcW;
+        scaledMaskCanvas.height = srcH;
+        scaledMaskCanvas.getContext('2d').drawImage(maskCanvas, 0, 0, srcW, srcH);
+        const scaledMaskData = scaledMaskCanvas.getContext('2d').getImageData(0, 0, srcW, srcH).data;
+
+        const outCanvas = document.createElement('canvas');
+        outCanvas.width = srcW;
+        outCanvas.height = srcH;
+        const outCtx = outCanvas.getContext('2d');
+        outCtx.drawImage(img, 0, 0, srcW, srcH);
+        const srcImageData = outCtx.getImageData(0, 0, srcW, srcH);
+        for (let i = 0; i < srcW * srcH; i++) {
+            srcImageData.data[i * 4 + 3] = scaledMaskData[i * 4 + 3];
+        }
+        outCtx.putImageData(srcImageData, 0, 0);
+        if (onProgress) onProgress(95);
+
+        return new Promise((resolve, reject) => {
+            outCanvas.toBlob(blob => (blob ? resolve(blob) : reject(new Error('BiRefNet 去背結果轉換成 PNG 失敗'))), 'image/png');
+        });
+    }
+
     async function removeBackgroundFromFile(file, modelChoice, onProgress) {
+        if (modelChoice === 'birefnet_lite') {
+            return removeBackgroundWithBiRefNet(file, onProgress);
+        }
         const removeBackground = await loadBgremoveModule();
         // publicPath 必須是絕對網址，直接給相對路徑字串會讓函式庫內部 new URL() 組路徑時失敗(Invalid base URL)
         const publicPath = new URL('./vendor/bgremove/', window.location.href).href;

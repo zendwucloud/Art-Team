@@ -739,6 +739,7 @@
             <span class="help-text" style="margin-bottom:12px; display:block;">
                 一樣完全在瀏覽器裡執行，圖片不會上傳到任何伺服器。「AI 智慧去背」的模型檔案(依畫質選擇約 45～90MB)放在同資料夾的 <code>vendor/bgremove</code> 裡，不用連外部網站。
                 ⚠️ 使用「AI 智慧去背」前，請先在「有網路」的環境下，於專案資料夾執行一次 <code>node download-bgremove-model.js</code> 下載模型檔案(細節看 <code>vendor/bgremove/README.txt</code>)，下載完成後就能完全離線使用，之後也不用再下載。「純色背景移除」不需要下載模型，隨時可用。<br>
+                🧪 「BiRefNet 精細版」是另外獨立的一套引擎，邊緣/毛髮處理得更細，但模型較大、速度也比較慢，屬於實驗性選項。要先在「有網路」的環境下額外執行一次 <code>node download-birefnet-model.js</code>(細節看 <code>vendor/birefnet/README.txt</code>)下載模型權重。⚠️ 跟上面三個選項不同，這個選項有兩個前提：<strong>需要網路連線</strong>(執行引擎是從 CDN 載入的，只有模型權重是本機的)，而且<strong>瀏覽器要支援 WebGPU</strong>(較新的 Chrome / Edge)。快速/中等/完整品質這三個選項不受影響，沒網路、沒 WebGPU 也照樣能用。
                 💡 <strong>怎麼選：</strong>一般照片、背景複雜或有漸層 → 用「AI 智慧去背」；背景是均勻色塊(例如白底參考圖、去背過的素材圖)、畫面裡有多個獨立物件都要保留 → 用「純色背景移除」，效果通常更準也更快，因為判斷邏輯是「顏色」而不是「找主角」，不會漏掉邊緣的角色。
             </span>
 
@@ -762,6 +763,7 @@
                         <option value="large" selected>完整品質(最準，模型較大，複雜背景/多物件裁切建議用這個)</option>
                         <option value="medium">中等品質(較準，模型約 90MB)</option>
                         <option value="small">快速(檔案小，模型約 45MB，邊緣較粗)</option>
+                        <option value="birefnet_lite">BiRefNet 精細版(實驗性，較慢，邊緣/毛髮更精細，需 WebGPU + 先執行 download-birefnet-model.js 下載模型)</option>
                     </select>
                 </div>
                 <div class="control-group" id="bgremoveToleranceGroup" style="display:none;">
