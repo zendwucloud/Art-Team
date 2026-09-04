@@ -56,6 +56,18 @@ service cloud.firestore {
       allow write: if isEditorOrAdmin();
     }
 
+    // 每日待辦事項完成度快照(給「美術組預計工作項目」匯出舊日期時回顯當時的完成度用)：
+    // - 檢視者、編輯者、管理者都可以讀(舊日期匯出時需要查詢)。
+    // - 只有編輯者/管理者能新增(每天第一個打開網站的人觸發寫入)。
+    // - 內容不能被修改(維持歷史紀錄的真實性)，但管理者可以整筆刪除(例如清理測試資料)，
+    //   在「管理」面板的「每日快照」頁籤操作。
+    match /dailySnapshots/{dateKey} {
+      allow read: if hasAccess();
+      allow create: if isEditorOrAdmin();
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
     // 修改紀錄(給管理者在「管理」面板裡查看)：
     // - 已登入的編輯者/管理者，可以新增自己的操作紀錄。
     // - 未登入的訪客，只能新增「使用了哪個工具、什麼時間」這種極簡匿名事件，

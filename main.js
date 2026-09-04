@@ -2,7 +2,7 @@ import config from './config.js';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import {
     getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
-    collection, addDoc, query, orderBy, limit, onSnapshot, serverTimestamp
+    collection, addDoc, query, where, orderBy, limit, onSnapshot, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
@@ -26,6 +26,7 @@ const googleProvider = new GoogleAuthProvider();
    ========================================================= */
 const allowedUsersCol = collection(db, 'allowedUsers');
 const auditLogCol = collection(db, 'auditLog');
+const dailySnapshotsCol = collection(db, 'dailySnapshots'); // 「待辦事項」每日完成度快照(給歷史回顯用，C 方案：靠有人開網站觸發，不是精準 00:00)
 const PERMANENT_ADMINS = (config.permanentAdmins || []).map(e => e.toLowerCase());
 
 function isPermanentAdmin(email) {
@@ -360,7 +361,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const modal = document.getElementById('adminModal');
         const closeBtn = document.getElementById('adminModalCloseBtn');
         const tabBtns = modal.querySelectorAll('.admin-tab-btn');
-        const tabPages = { users: document.getElementById('adminTab-users'), log: document.getElementById('adminTab-log') };
+        const tabPages = { users: document.getElementById('adminTab-users'), log: document.getElementById('adminTab-log'), snapshots: document.getElementById('adminTab-snapshots') };
+        const snapshotMsg = document.getElementById('adminSnapshotMsg');
+        const snapshotTableBody = document.getElementById('adminSnapshotTableBody');
+        const snapshotRefreshBtn = document.getElementById('adminSnapshotRefreshBtn');
         const userMsg = document.getElementById('adminUserMsg');
         const userTableBody = document.getElementById('adminUserTableBody');
         const newEmailInput = document.getElementById('adminNewUserEmail');
@@ -387,6 +391,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 btn.classList.add('active');
                 Object.entries(tabPages).forEach(([key, page]) => page.classList.toggle('active', key === btn.dataset.adminTab));
                 if (btn.dataset.adminTab === 'log') loadLog();
+                if (btn.dataset.adminTab === 'snapshots') loadSnapshots();
             });
         });
 
@@ -534,6 +539,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const who = (data.nickname ? data.nickname + ' ' : '') + (data.email || '');
                 return { who, action: actionLabel, detail: `${data.targetEmail || ''}：${data.detail || ''}` };
             }
+            if (data.type === 'snapshotManage') {
+                const who = (data.nickname ? data.nickname + ' ' : '') + (data.email || '');
+                return { who, action: '刪除每日快照', detail: `刪除了 ${data.targetDate || ''} 的快照紀錄` };
+            }
             // type === 'edit'
             const who = (data.nickname ? data.nickname + ' ' : '') + (data.email || '');
             const changes = data.changes || [];
@@ -585,6 +594,74 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         logRefreshBtn.addEventListener('click', loadLog);
+
+        async function loadSnapshots() {
+            snapshotMsg.textContent = '載入中...';
+            snapshotMsg.classList.remove('error');
+            snapshotTableBody.innerHTML = '';
+            try {
+                const q = query(dailySnapshotsCol, orderBy('date', 'desc'), limit(500));
+                const snap = await getDocs(q);
+                if (snap.empty) {
+                    snapshotMsg.textContent = '目前還沒有任何快照紀錄。';
+                    return;
+                }
+                snapshotMsg.textContent = `共 ${snap.size} 筆快照(依日期新到舊排序，永久保留，只有管理者能刪除)`;
+                snap.forEach(d => {
+                    const data = d.data();
+                    const tr = document.createElement('tr');
+
+                    const tdDate = document.createElement('td');
+                    tdDate.textContent = data.date || d.id;
+                    tr.appendChild(tdDate);
+
+                    const tdCount = document.createElement('td');
+                    tdCount.textContent = (data.items || []).length;
+                    tr.appendChild(tdCount);
+
+                    const tdBy = document.createElement('td');
+                    tdBy.textContent = data.capturedBy || '(未知)';
+                    tr.appendChild(tdBy);
+
+                    const tdTime = document.createElement('td');
+                    tdTime.textContent = formatTimestamp(data.timestamp);
+                    tr.appendChild(tdTime);
+
+                    const tdAction = document.createElement('td');
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'btn-danger-solid';
+                    delBtn.textContent = '刪除';
+                    delBtn.addEventListener('click', async () => {
+                        if (!confirm(`確定要刪除 ${data.date || d.id} 這筆快照嗎？刪除後無法復原，之後匯出這天(或這天以前，直到下一筆較舊的快照)的資料時會改成顯示「查無快照」。`)) return;
+                        try {
+                            await deleteDoc(doc(db, 'dailySnapshots', d.id));
+                            await addDoc(auditLogCol, {
+                                type: 'snapshotManage',
+                                action: 'delete',
+                                targetDate: data.date || d.id,
+                                email: currentUserEmail || '(未知使用者)',
+                                nickname: currentUserNickname || '',
+                                timestamp: serverTimestamp()
+                            });
+                            loadSnapshots();
+                        } catch (err) {
+                            console.error('刪除快照失敗：', err);
+                            alert('刪除快照失敗，請確認自己是管理者身份');
+                        }
+                    });
+                    tdAction.appendChild(delBtn);
+                    tr.appendChild(tdAction);
+
+                    snapshotTableBody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error('載入快照清單失敗：', err);
+                snapshotMsg.textContent = '載入失敗，請確認自己是管理者身份後再試一次';
+                snapshotMsg.classList.add('error');
+            }
+        }
+
+        snapshotRefreshBtn.addEventListener('click', loadSnapshots);
     }
     setupAdminPanel();
 
@@ -678,6 +755,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // 放在這裡(自動搬遷邏輯之前)，是為了讓下面幾段自動搬遷/補資料如果真的觸發存檔，
         // 也能被正確比對出「搬遷前 → 搬遷後」的差異，一併寫進修改紀錄。
         lastSynced = { projects: cloneState(allProjects), assignmentSheet: cloneState(assignmentSheet), weeklyReport: cloneState(weeklyReport) };
+
+        if (!dailySnapshotChecked) {
+            dailySnapshotChecked = true;
+            maybeCaptureDailySnapshot(); // 背景執行，不 await，不影響畫面渲染速度
+        }
 
         let needsSave = false;
 
@@ -2133,10 +2215,17 @@ document.addEventListener('DOMContentLoaded', () => {
             .filter(row => getPlatformGroup(row.projectName).key !== 'OTHER') // 美術圖庫等不屬於固定平台的項目不列入待辦事項
             .map(row => {
                 const completion = computeProjectOverallCompletion(row);
+                const assignedPeople = sortBySeniority(
+                    config.personnel.filter(p => (row.cells[p.name] || '').trim() !== ''),
+                    p => p.name
+                ).map(p => p.name);
                 return {
+                    rowId: row.id,
                     name: row.projectName.trim(),
                     completion,
-                    status: completionToStatusLabel(completion)
+                    status: completionToStatusLabel(completion),
+                    assignedPeople, // 只在畫面上顯示用，資料來源是「工作分配表」的角色欄位，這裡不能編輯
+                    note: row.note || '' // 這頁專屬的備註欄位，跟其他頁籤的資料無關，直接存在該專案列的 note 欄位裡
                 };
             })
             .filter(item => item.completion < 100); // 完成度 100% 的項目已經做完，待辦事項只留還沒完成的
@@ -2145,7 +2234,58 @@ document.addEventListener('DOMContentLoaded', () => {
             // 完成度高的排上面；完成度相同時，維持原本(依名稱現狀)的相對順序
             return rows.slice().sort((a, b) => b.completion - a.completion);
         }
-        return rows; // getSortedRows() 本身就已經是依專案名稱現狀(平台分類 + 名稱中的數字)排好的順序
+        return rows; // getSortedRows() 本身就已經是依平台分類 + 名稱中的數字排好的順序
+    }
+
+    /* ---------------------------------------------------------
+       每日待辦事項快照(C 方案)：
+       - 不是精準 00:00 觸發，而是「當天第一個登入的編輯者/管理者」打開網站時，
+         偷偷檢查今天存過快照了沒，沒有的話就存一份現在的完成度進去。
+       - 存的是「所有專案」(不套用完成度<100%的篩選)，這樣就算某個專案後來做到 100%，
+         回頭看舊日期的快照時，還是能正確顯示「那天它還沒做完」。
+    --------------------------------------------------------- */
+    function captureTodoSnapshotItems() {
+        return getSortedRows()
+            .filter(row => (row.projectName || '').trim() !== '')
+            .filter(row => getPlatformGroup(row.projectName).key !== 'OTHER')
+            .map(row => {
+                const completion = computeProjectOverallCompletion(row);
+                return { name: row.projectName.trim(), completion, status: completionToStatusLabel(completion) };
+            });
+    }
+
+    let dailySnapshotChecked = false; // 每個瀏覽階段只檢查一次，避免每次雲端資料更新都重複查詢
+    async function maybeCaptureDailySnapshot() {
+        if (currentUserRole !== 'editor' && currentUserRole !== 'admin') return; // 檢視者不寫入(Rules 也會擋)
+        const todayKey = dateToKey(new Date());
+        try {
+            const existing = await getDoc(doc(db, 'dailySnapshots', todayKey));
+            if (existing.exists()) return; // 今天已經有人存過了
+            await setDoc(doc(db, 'dailySnapshots', todayKey), {
+                date: todayKey,
+                items: captureTodoSnapshotItems(),
+                capturedBy: currentUserEmail || '',
+                timestamp: serverTimestamp()
+            });
+        } catch (err) {
+            console.warn('每日待辦事項快照寫入失敗(不影響其他功能)：', err);
+        }
+    }
+
+    // 找「小於等於指定日期」最近的一筆快照(例如選週三，但只有週一有存到，就抓週一那筆)。
+    // 完全沒有符合的快照時回傳 null，呼叫端要自己決定 fallback 成目前最新資料。
+    async function findHistoricalTodoSnapshot(targetDate) {
+        const targetKey = dateToKey(targetDate);
+        try {
+            const q = query(dailySnapshotsCol, where('date', '<=', targetKey), orderBy('date', 'desc'), limit(1));
+            const snap = await getDocs(q);
+            if (snap.empty) return null;
+            const data = snap.docs[0].data();
+            return { date: data.date, items: data.items || [] };
+        } catch (err) {
+            console.error('查詢歷史快照失敗：', err);
+            return null;
+        }
     }
 
     function renderDigestTodoTable() {
@@ -2166,6 +2306,30 @@ document.addEventListener('DOMContentLoaded', () => {
             tdStatus.className = 'digest-todo-status';
             tdStatus.textContent = item.status;
             tr.appendChild(tdStatus);
+
+            // 指派人員：純顯示用，資料來自「美術組工作分配表」的角色欄位，這裡不能直接改，
+            // 要改指派的人請去工作分配表那頁調整。
+            const tdAssigned = document.createElement('td');
+            tdAssigned.className = 'digest-todo-assigned';
+            tdAssigned.textContent = item.assignedPeople.length > 0 ? item.assignedPeople.join('、') : '—';
+            tr.appendChild(tdAssigned);
+
+            // 備註：這頁專屬的自由輸入欄位，跟其他頁籤資料無關，存在該專案列的 note 欄位裡，
+            // 不會出現在匯出的 .xlsx 週進度報告裡。
+            const tdNote = document.createElement('td');
+            tdNote.className = 'digest-todo-note';
+            const noteInput = document.createElement('input');
+            noteInput.type = 'text';
+            noteInput.value = item.note;
+            noteInput.placeholder = '(無)';
+            noteInput.addEventListener('change', () => {
+                const row = assignmentSheet.rows.find(r => r.id === item.rowId);
+                if (!row) return;
+                row.note = noteInput.value;
+                saveAssignmentSheet();
+            });
+            tdNote.appendChild(noteInput);
+            tr.appendChild(tdNote);
 
             digestTodoTableBody.appendChild(tr);
         });
@@ -2195,14 +2359,28 @@ document.addEventListener('DOMContentLoaded', () => {
         renderDigestTodoTable();
     }
 
-    async function exportDigestXlsx(baseDate) {
+    async function exportDigestXlsx(baseDate, useHistorical) {
         if (typeof ExcelJS === 'undefined') {
             alert('匯出功能需要的函式庫載入失敗，請確認 vendor/exceljs/exceljs.min.js 是否存在。');
             return;
         }
 
         const personData = getDigestPersonWeekData(baseDate);
-        const todoRows = getDigestTodoRows();
+
+        // 「指定日期匯出」才嘗試找當時的快照；「今天」的匯出固定用即時資料就好，不用查快照。
+        let todoRows = getDigestTodoRows();
+        let todoNote = '';
+        if (useHistorical) {
+            const snapshot = await findHistoricalTodoSnapshot(baseDate);
+            if (snapshot) {
+                todoRows = snapshot.items.filter(item => item.completion < 100);
+                todoNote = snapshot.date === dateToKey(baseDate)
+                    ? `(${snapshot.date} 當天的快照紀錄)`
+                    : `(查無 ${dateToKey(baseDate)} 當天的快照，顯示往前最近一筆 ${snapshot.date} 的紀錄)`;
+            } else {
+                todoNote = '(查無當時的快照紀錄，顯示目前最新資料)';
+            }
+        }
 
         const FONT = { name: '新細明體', size: 13 };
         const HEADER_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA9D18E' } };
@@ -2233,8 +2411,8 @@ document.addEventListener('DOMContentLoaded', () => {
         ws.addRow([]);
         ws.addRow([]);
 
-        // ---- 待辦事項表頭(同樣套色) ----
-        const todoHeaderRow = ws.addRow(['待辦事項', '項目', '項目進度', '狀態']);
+        // ---- 待辦事項表頭(同樣套色)，指定日期匯出時附註資料來源是哪天的快照 ----
+        const todoHeaderRow = ws.addRow(['待辦事項' + (todoNote ? ' ' + todoNote : ''), '項目', '項目進度', '狀態']);
         todoHeaderRow.eachCell(cell => {
             cell.fill = HEADER_FILL;
             cell.font = { ...FONT, bold: true };
@@ -2267,7 +2445,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     digestExportBtn.addEventListener('click', () => {
-        exportDigestXlsx(new Date());
+        exportDigestXlsx(new Date(), false);
     });
 
     digestExportCustomBtn.addEventListener('click', () => {
@@ -2276,7 +2454,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         const [y, m, d] = digestExportCustomDate.value.split('-').map(Number);
-        exportDigestXlsx(new Date(y, m - 1, d));
+        exportDigestXlsx(new Date(y, m - 1, d), true);
     });
 
     /* =========================================================

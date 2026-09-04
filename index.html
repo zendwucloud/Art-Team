@@ -334,6 +334,8 @@
             padding: 4px 10px; border-radius: 4px; margin-bottom: 8px;
         }
 
+        .digest-todo-note input { width: 100%; box-sizing: border-box; }
+
         #videoDiagLine.bad { color: #c0392b; }
         .diag-box summary { cursor: pointer; color: #4a6fa5; margin-top: 4px; }
         #videoDebugLog {
@@ -579,9 +581,11 @@
                 <table id="digestTodoTable">
                     <thead>
                         <tr>
-                            <th id="digestTodoSortByName" style="width:280px;" class="digest-sortable">項目 <span id="digestSortNameIndicator"></span></th>
-                            <th id="digestTodoSortByProgress" style="width:120px;" class="digest-sortable">項目進度 <span id="digestSortProgressIndicator"></span></th>
-                            <th style="width:160px;">狀態</th>
+                            <th id="digestTodoSortByName" style="width:33.33%;" class="digest-sortable">項目 <span id="digestSortNameIndicator"></span></th>
+                            <th id="digestTodoSortByProgress" style="width:16.67%;" class="digest-sortable">項目進度 <span id="digestSortProgressIndicator"></span></th>
+                            <th style="width:16.67%;">狀態</th>
+                            <th style="width:16.67%;">指派人員</th>
+                            <th style="width:16.67%;">備註</th>
                         </tr>
                     </thead>
                     <tbody id="digestTodoTableBody"></tbody>
@@ -854,6 +858,7 @@
             <div class="admin-tab-bar">
                 <button class="admin-tab-btn active" data-admin-tab="users">👤 使用者權限</button>
                 <button class="admin-tab-btn" data-admin-tab="log">📜 修改紀錄</button>
+                <button class="admin-tab-btn" data-admin-tab="snapshots">📸 每日快照</button>
             </div>
 
             <div id="adminTab-users" class="admin-tab-page active">
@@ -885,6 +890,19 @@
                     <table id="adminLogTable">
                         <thead><tr><th style="width:150px;">時間</th><th style="width:180px;">使用者</th><th style="width:150px;">動作</th><th>詳細內容</th></tr></thead>
                         <tbody id="adminLogTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="adminTab-snapshots" class="admin-tab-page">
+                <div class="admin-log-toolbar">
+                    <button id="adminSnapshotRefreshBtn" class="btn-secondary">🔄 重新整理</button>
+                    <span class="help-text" id="adminSnapshotMsg">「美術組預計工作項目」匯出舊日期時，會拿這裡的紀錄回顯當時的完成度；永久保留，只有管理者能手動刪除。</span>
+                </div>
+                <div class="table-scroll">
+                    <table id="adminSnapshotTable">
+                        <thead><tr><th style="width:130px;">日期</th><th style="width:100px;">專案數</th><th style="width:180px;">觸發者</th><th style="width:150px;">存檔時間</th><th style="width:90px;">操作</th></tr></thead>
+                        <tbody id="adminSnapshotTableBody"></tbody>
                     </table>
                 </div>
             </div>
