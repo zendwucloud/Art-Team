@@ -119,9 +119,10 @@
         /* 頁籤零：美術組週進度報告，配色比照原本 Excel 週報表 */
         #weeklyTable { table-layout: fixed; width: max-content; min-width: 100%; }
         #weeklyTable th, #weeklyTable td { border: 1px solid #ddd; padding: 4px 6px; vertical-align: top; font-size: 13px; }
-        #weeklyTable th.weekly-date-header { background: #F46423; color: white; width: 110px; min-width: 110px; }
+        #weeklyTable th.weekly-date-header { background: #F46423; color: white; width: 110px; min-width: 110px; position: sticky; left: 0; z-index: 3; }
         #weeklyTable th.weekly-person-header { background: #FEF8E2; width: 200px; min-width: 200px; text-align: center; font-weight: bold; }
         #weeklyTable td.weekly-date-cell {
+            position: sticky; left: 0; z-index: 1;
             width: 110px; min-width: 110px; text-align: center; font-weight: bold; color: #444;
             white-space: nowrap; background: white;
         }
