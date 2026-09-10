@@ -146,8 +146,8 @@
         #digestPersonTable td.digest-person-name { width: 90px; font-weight: bold; text-align: center; background: #FFF6E5; }
         #digestPersonTable td.digest-week-cell { white-space: pre-wrap; line-height: 1.5; }
         #digestTodoTable th { background: #FEF8E2; text-align: center; }
-        #digestTodoTable th.digest-sortable { cursor: pointer; user-select: none; }
-        #digestTodoTable th.digest-sortable:hover { background: #FCEBB0; }
+        #digestTodoTable th.digest-sortable, #statusTable th.digest-sortable { cursor: pointer; user-select: none; }
+        #digestTodoTable th.digest-sortable:hover, #statusTable th.digest-sortable:hover { background: #FCEBB0; }
         #digestTodoTable td.digest-todo-progress { text-align: center; }
         #digestTodoTable td.digest-todo-status { text-align: center; font-weight: bold; }
         .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
@@ -488,14 +488,14 @@
             <div class="assign-toolbar">
                 <button id="toggleImportBtnEstimate" class="btn-secondary">📥 從 Excel 貼上匯入</button>
                 <button id="copyEstimateBtn" class="btn-secondary">📋 複製設定/動畫預估</button>
-                <button id="copyQtyBtn" class="btn-secondary">📋 複製數量</button>
+                <button id="copyQtyBtn" class="btn-secondary">📋 複製數量(設定+動畫)</button>
             </div>
             <div id="importPanelEstimate">
                 <span class="help-text">
-                    請貼上「工項名稱」與「數量」兩欄資料(以 Tab 分隔)，會依工項名稱比對，自動帶入數量到目前選擇的專案「<span id="importTargetProjectName"></span>」。<br>
-                    例如：<code>Symbol_AKQJ10&nbsp;&nbsp;&nbsp;3</code>，工項名稱需與左側「工項名稱」欄一致才能對得上。
+                    請貼上「工項名稱」「設定數量」「動畫數量」三欄資料(以 Tab 分隔)，會依工項名稱比對，自動帶入到目前選擇的專案「<span id="importTargetProjectName"></span>」。<br>
+                    例如：<code>Symbol_AKQJ10&nbsp;&nbsp;&nbsp;3&nbsp;&nbsp;&nbsp;0</code>，工項名稱需與左側「工項名稱」欄一致才能對得上。
                 </span>
-                <textarea id="importTextEstimate" placeholder="工項名稱[Tab]數量，一列一筆"></textarea>
+                <textarea id="importTextEstimate" placeholder="工項名稱[Tab]設定數量[Tab]動畫數量，一列一筆"></textarea>
                 <div style="margin-top:8px; display:flex; gap:10px;">
                     <button id="importConfirmBtnEstimate" class="btn-primary">匯入(套用到目前專案)</button>
                     <button id="importCancelBtnEstimate" class="btn-secondary">取消</button>
@@ -507,13 +507,14 @@
                 <thead>
                     <tr class="section-labels">
                         <th class="base-label" colspan="3">◀ 基礎工時 (依本專案折數對照)</th>
-                        <th class="input-label" colspan="4">本專案試算 ▶</th>
+                        <th class="input-label" colspan="5">本專案試算 ▶</th>
                     </tr>
                     <tr>
                         <th class="col-base">工項名稱</th>
                         <th class="col-base">設定基準 (天)</th>
                         <th class="col-base">動畫基準 (天)</th>
-                        <th class="col-divider">數量</th>
+                        <th class="col-divider">設定數量</th>
+                        <th>動畫數量</th>
                         <th>設定預估 (天)</th>
                         <th>動畫預估 (天)</th>
                         <th>指派人員 (自動帶入)</th>
@@ -542,12 +543,12 @@
                 <table id="statusTable">
                     <thead>
                         <tr>
-                            <th>專案名稱</th>
-                            <th>上線日期</th>
+                            <th id="statusSortByName" class="digest-sortable">專案名稱 <span id="statusSortNameIndicator"></span></th>
+                            <th id="statusSortByDate" class="digest-sortable">上線日期 <span id="statusSortDateIndicator"></span></th>
                             <th>負責角色</th>
                             <th>專案預估總工時</th>
                             <th>執行狀態</th>
-                            <th>完成度</th>
+                            <th id="statusSortByCompletion" class="digest-sortable">完成度 <span id="statusSortCompletionIndicator"></span></th>
                         </tr>
                     </thead>
                     <tbody id="statusTableBody"></tbody>

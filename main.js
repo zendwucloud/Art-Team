@@ -1587,6 +1587,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 依目前的折數與數量，算出每一列(工項 + 結算列 + 總計列)的設定/動畫預估工時，
+    // 讀取某個工項的「設定數量」或「動畫數量」。
+    // field 傳 'settingQty' 或 'animationQty'。
+    // 相容舊資料：以前設定跟動畫共用同一個「數量」欄位(存在 taskInfo.qty 裡)，
+    // 現在拆成兩個獨立欄位，如果新欄位還沒設定過，就退回去用舊的 qty 當預設值，
+    // 這樣以前輸入過的資料不會憑空消失或跳回 1；等使用者真的改過某一欄，那一欄才會有自己的值。
+    function getTaskQty(taskInfo, field) {
+        if (!taskInfo) return 1;
+        if (taskInfo[field] !== undefined) return taskInfo[field];
+        if (taskInfo.qty !== undefined) return taskInfo.qty;
+        return 1;
+    }
+
     // 順序跟畫面上顯示的一致，給「複製設定/動畫預估」按鈕使用
     function computeEstimateRows(currentProj, tierKey) {
         const assignments = currentProj.assignments || {};
@@ -1600,12 +1612,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 rows.push({ setting: grandSetting, animation: grandAnimation });
                 subtotalInserted = true;
             }
-            const taskInfo = assignments[taskName] || { qty: 1 };
-            const qty = taskInfo.qty !== undefined ? taskInfo.qty : 1;
+            const taskInfo = assignments[taskName];
+            const settingQty = getTaskQty(taskInfo, 'settingQty');
+            const animationQty = getTaskQty(taskInfo, 'animationQty');
             const settingBase = taskData.setting[tierKey] !== undefined ? taskData.setting[tierKey] : 0;
             const animationBase = taskData.animation[tierKey] !== undefined ? taskData.animation[tierKey] : 0;
-            const settingEstimated = parseFloat((settingBase * qty).toFixed(2));
-            const animationEstimated = parseFloat((animationBase * qty).toFixed(2));
+            const settingEstimated = parseFloat((settingBase * settingQty).toFixed(2));
+            const animationEstimated = parseFloat((animationBase * animationQty).toFixed(2));
             grandSetting += settingEstimated;
             grandAnimation += animationEstimated;
             rows.push({ setting: settingEstimated, animation: animationEstimated });
@@ -1647,7 +1660,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const subtotalRow = document.createElement('tr');
             subtotalRow.style.backgroundColor = '#FFF3CD';
             subtotalRow.innerHTML = `
-                <td colspan="4" style="text-align: right; font-weight: bold;">${label}：</td>
+                <td colspan="5" style="text-align: right; font-weight: bold;">${label}：</td>
                 <td style="color: #b8860b; font-weight: bold;">${settingTotal.toFixed(2)} 天</td>
                 <td style="color: #b8860b; font-weight: bold;">${animationTotal.toFixed(2)} 天</td>
                 <td></td>
@@ -1666,24 +1679,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 subtotalInserted = true;
             }
 
-            const taskInfo = assignments[taskName] || { qty: 1 };
-            const currentQty = taskInfo.qty !== undefined ? taskInfo.qty : 1;
+            const taskInfo = assignments[taskName];
+            const settingQty = getTaskQty(taskInfo, 'settingQty');
+            const animationQty = getTaskQty(taskInfo, 'animationQty');
 
             // 該折數下的基礎工時 (比照 Excel，每個折數各自登記的數字，而非用比例硬算)
             const settingBase = taskData.setting[tierKey] !== undefined ? taskData.setting[tierKey] : 0;
             const animationBase = taskData.animation[tierKey] !== undefined ? taskData.animation[tierKey] : 0;
 
-            // 設定預估與動畫預估分開計算 (該折數的基礎工時 x 數量)
-            const settingEstimated = (settingBase * currentQty).toFixed(2);
-            const animationEstimated = (animationBase * currentQty).toFixed(2);
+            // 設定預估與動畫預估分開計算 (該折數的基礎工時 x 各自的數量)，
+            // 設定跟動畫的數量彼此獨立，例如這個工項只做動畫、不用做設定，設定數量填 0 就好，不會互相影響。
+            const settingEstimated = (settingBase * settingQty).toFixed(2);
+            const animationEstimated = (animationBase * animationQty).toFixed(2);
 
             grandTotalSetting += parseFloat(settingEstimated);
             grandTotalAnimation += parseFloat(animationEstimated);
 
             const tr = document.createElement('tr');
-            const rowBg = currentQty === 0 ? "#f2f2f2" : bgColor;
+            const bothZero = settingQty === 0 && animationQty === 0;
+            const rowBg = bothZero ? "#f2f2f2" : bgColor;
 
-            const qtyHTML = `<input type="number" class="qty-input" data-task="${taskName}" value="${currentQty}" min="0" step="1">`;
+            const settingQtyHTML = `<input type="number" class="qty-input" data-task="${taskName}" data-field="settingQty" value="${settingQty}" min="0" step="1">`;
+            const animationQtyHTML = `<input type="number" class="qty-input" data-task="${taskName}" data-field="animationQty" value="${animationQty}" min="0" step="1">`;
 
             const assignees = assigneesForCategory(projectAssignees, categoryKey);
             const assigneeHTML = assignees.length
@@ -1694,9 +1711,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="col-base">${taskName}</td>
                 <td class="col-base">${settingBase}</td>
                 <td class="col-base">${animationBase}</td>
-                <td class="col-divider" style="background-color:${rowBg};">${qtyHTML}</td>
-                <td style="background-color:${rowBg}; color: ${currentQty === 0 ? '#999' : '#2c662d'}; font-weight: bold;">${settingEstimated}</td>
-                <td style="background-color:${rowBg}; color: ${currentQty === 0 ? '#999' : '#2c662d'}; font-weight: bold;">${animationEstimated}</td>
+                <td class="col-divider" style="background-color:${rowBg};">${settingQtyHTML}</td>
+                <td style="background-color:${rowBg};">${animationQtyHTML}</td>
+                <td style="background-color:${rowBg}; color: ${settingQty === 0 ? '#999' : '#2c662d'}; font-weight: bold;">${settingEstimated}</td>
+                <td style="background-color:${rowBg}; color: ${animationQty === 0 ? '#999' : '#2c662d'}; font-weight: bold;">${animationEstimated}</td>
                 <td style="background-color:${rowBg};">${assigneeHTML}</td>
             `;
             taskTableBody.appendChild(tr);
@@ -1710,7 +1728,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const totalRow = document.createElement('tr');
         totalRow.style.backgroundColor = '#FFF3CD';
         totalRow.innerHTML = `
-            <td colspan="4" style="text-align: right; font-weight: bold;">專案開發加總(加上廣宣)：</td>
+            <td colspan="5" style="text-align: right; font-weight: bold;">專案開發加總(加上廣宣)：</td>
             <td style="color: #d32f2f; font-weight: bold; font-size: 1.05em;">設定: ${grandTotalSetting.toFixed(2)} 天</td>
             <td style="color: #d32f2f; font-weight: bold; font-size: 1.05em;">動畫: ${grandTotalAnimation.toFixed(2)} 天</td>
             <td></td>
@@ -1720,10 +1738,11 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('.qty-input').forEach(input => {
             input.addEventListener('change', (e) => {
                 const task = e.target.getAttribute('data-task');
+                const field = e.target.getAttribute('data-field'); // 'settingQty' 或 'animationQty'
                 if (!allProjects[currentProjectName].assignments[task]) {
-                    allProjects[currentProjectName].assignments[task] = { qty: 1 };
+                    allProjects[currentProjectName].assignments[task] = {};
                 }
-                allProjects[currentProjectName].assignments[task].qty = parseFloat(e.target.value) || 0;
+                allProjects[currentProjectName].assignments[task][field] = parseFloat(e.target.value) || 0;
                 saveProjects();
             });
         });
@@ -1753,9 +1772,17 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // 新專案的每個工項數量都明確設成 0(不是留空)。這樣新專案從「空白」開始，
+        // 要哪個工項才自己填數字；舊專案不受影響，沒填過的工項還是照舊當作 1 計算，
+        // 不會因為這個改動害舊專案原本算好的工時憑空變不見。
+        const initialAssignments = {};
+        Object.keys(config.baseTasks).forEach(taskName => {
+            initialAssignments[taskName] = { settingQty: 0, animationQty: 0 };
+        });
+
         allProjects[trimmedName] = {
             discountTier: 1.0,
-            assignments: {}
+            assignments: initialAssignments
         };
 
         // 同步在頁籤一「美術組工作分配表」建立同名的空白列，
@@ -1819,7 +1846,11 @@ document.addEventListener('DOMContentLoaded', () => {
             currentProjectName = getFilteredSortedProjectNames()[0] || remaining[0];
         } else {
             currentProjectName = "預設專案";
-            allProjects[currentProjectName] = { discountTier: 1.0, assignments: {} };
+            const initialAssignments = {};
+            Object.keys(config.baseTasks).forEach(taskName => {
+                initialAssignments[taskName] = { settingQty: 0, animationQty: 0 };
+            });
+            allProjects[currentProjectName] = { discountTier: 1.0, assignments: initialAssignments };
         }
         saveProjects();
     });
@@ -1853,20 +1884,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const assignments = currentProj.assignments || {};
         const rows = [];
 
-        // 依序抓出所有工項名稱與對應的數量
+        // 依序抓出所有工項名稱與對應的設定數量、動畫數量
         for (const taskName of Object.keys(config.baseTasks)) {
-            const taskInfo = assignments[taskName] || { qty: 1 };
-            // 如果數量沒被修改過，預設就是 1
-            const qty = taskInfo.qty !== undefined ? taskInfo.qty : 1; 
-            // 結合成 "工項名稱(Tab)數量" 的格式，正好對應匯入功能
-            rows.push(`${taskName}\t${qty}`);
+            const taskInfo = assignments[taskName];
+            const settingQty = getTaskQty(taskInfo, 'settingQty');
+            const animationQty = getTaskQty(taskInfo, 'animationQty');
+            // 結合成 "工項名稱(Tab)設定數量(Tab)動畫數量" 的格式，正好對應匯入功能
+            rows.push(`${taskName}\t${settingQty}\t${animationQty}`);
         }
 
         const text = rows.join('\n');
 
         try {
             await navigator.clipboard.writeText(text);
-            alert(`已複製「${currentProjectName}」的數量設定到剪貼簿。\n\n可以直接貼到 Excel，或是用「從 Excel 貼上匯入」功能貼回來。`);
+            alert(`已複製「${currentProjectName}」的設定數量、動畫數量到剪貼簿。\n\n可以直接貼到 Excel，或是用「從 Excel 貼上匯入」功能貼回來。`);
         } catch (err) {
             console.error('複製到剪貼簿失敗：', err);
             alert('複製失敗，你的瀏覽器可能不允許自動存取剪貼簿。請改用手動選取表格內容複製。');
@@ -1898,8 +1929,9 @@ document.addEventListener('DOMContentLoaded', () => {
         lines.forEach(line => {
             const fields = line.split('\t');
             const rawName = (fields[0] || '').trim();
-            const qty = parseFloat(fields[1]);
-            if (!rawName || isNaN(qty)) return;
+            const settingQty = parseFloat(fields[1]);
+            const animationQty = parseFloat(fields[2]);
+            if (!rawName || (isNaN(settingQty) && isNaN(animationQty))) return;
 
             const taskName = taskNameLookup[rawName];
             if (!taskName) {
@@ -1907,9 +1939,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             if (!assignments[taskName]) {
-                assignments[taskName] = { qty: 1 };
+                assignments[taskName] = {};
             }
-            assignments[taskName].qty = qty;
+            if (!isNaN(settingQty)) assignments[taskName].settingQty = settingQty;
+            if (!isNaN(animationQty)) assignments[taskName].animationQty = animationQty;
             matchedCount++;
         });
 
@@ -1930,8 +1963,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const personPicker = document.getElementById('personPicker');
     const statusTableBody = document.getElementById('statusTableBody');
     const statusEmptyMsg = document.getElementById('statusEmptyMsg');
+    const statusSortByName = document.getElementById('statusSortByName');
+    const statusSortByDate = document.getElementById('statusSortByDate');
+    const statusSortByCompletion = document.getElementById('statusSortByCompletion');
+    const statusSortNameIndicator = document.getElementById('statusSortNameIndicator');
+    const statusSortDateIndicator = document.getElementById('statusSortDateIndicator');
+    const statusSortCompletionIndicator = document.getElementById('statusSortCompletionIndicator');
 
     let selectedPerson = null;
+    let statusSortMode = 'name'; // 'name'：依專案名稱現狀排(預設) | 'date'：依上線日期排 | 'completion'：依完成度排
 
     // 「美術組專案執行狀況」的人員篩選鍵、「美術組預計工作項目」的人員週報表，
     // 都改成照這個資歷順序排(由左到右/由上到下)；沒列在這裡的人(例如「離職設定」「離職後製」)
@@ -1978,12 +2018,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const assignments = proj.assignments || {};
         let setting = 0, promo = 0, animation = 0;
         for (const [taskName, taskData] of Object.entries(config.baseTasks)) {
-            const taskInfo = assignments[taskName] || { qty: 1 };
-            const qty = taskInfo.qty !== undefined ? taskInfo.qty : 1;
+            const taskInfo = assignments[taskName];
+            const settingQty = getTaskQty(taskInfo, 'settingQty');
+            const animationQty = getTaskQty(taskInfo, 'animationQty');
             const settingBase = taskData.setting[tierKey] !== undefined ? taskData.setting[tierKey] : 0;
             const animationBase = taskData.animation[tierKey] !== undefined ? taskData.animation[tierKey] : 0;
-            const settingEstimated = parseFloat((settingBase * qty).toFixed(2));
-            const animationEstimated = parseFloat((animationBase * qty).toFixed(2));
+            const settingEstimated = parseFloat((settingBase * settingQty).toFixed(2));
+            const animationEstimated = parseFloat((animationBase * animationQty).toFixed(2));
             if (taskData.category === 'promo') {
                 promo += settingEstimated;
             } else {
@@ -2006,10 +2047,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const rows = getSortedRows().filter(row => (row.cells[selectedPerson] || '').trim() !== '');
 
+        // 預設沿用 getSortedRows() 的專案名稱現狀排序；選了「上線日期」或「完成度」就換一種排法。
+        // 完成度要先把每一列(該人員在這個專案)的完成度算出來才能排序，所以先轉成帶完成度的陣列再排。
+        const rowsWithCompletion = rows.map(row => {
+            if (!row.statusMeta[selectedPerson]) {
+                row.statusMeta[selectedPerson] = { status: '準時', completion: 0 };
+            }
+            return { row, completion: row.statusMeta[selectedPerson].completion || 0 };
+        });
+
+        if (statusSortMode === 'date') {
+            // 上線日期由舊到新；沒填日期的排最後面
+            rowsWithCompletion.sort((a, b) => {
+                const da = a.row.onlineDate || '';
+                const db = b.row.onlineDate || '';
+                if (!da && !db) return 0;
+                if (!da) return 1;
+                if (!db) return -1;
+                return da.localeCompare(db);
+            });
+        } else if (statusSortMode === 'completion') {
+            // 完成度高的排上面
+            rowsWithCompletion.sort((a, b) => b.completion - a.completion);
+        }
+        // statusSortMode === 'name' 時不用再排，rowsWithCompletion 本來就是 getSortedRows() 的順序
+
         statusEmptyMsg.style.display = rows.length === 0 ? 'block' : 'none';
         statusEmptyMsg.textContent = '這個人目前在「美術專案工作分配表」裡沒有被指派任何專案。';
 
-        rows.forEach(row => {
+        rowsWithCompletion.forEach(({ row }) => {
             const roleText = (row.cells[selectedPerson] || '').trim();
             const baseColor = getRoleColor(roleText);
             if (!row.statusMeta[selectedPerson]) {
@@ -2081,6 +2147,32 @@ document.addEventListener('DOMContentLoaded', () => {
             statusTableBody.appendChild(tr);
         });
     }
+
+    function updateStatusSortIndicators() {
+        statusSortNameIndicator.textContent = statusSortMode === 'name' ? '▲' : '';
+        statusSortDateIndicator.textContent = statusSortMode === 'date' ? '▲' : '';
+        statusSortCompletionIndicator.textContent = statusSortMode === 'completion' ? '▼' : '';
+    }
+
+    statusSortByName.addEventListener('click', () => {
+        statusSortMode = 'name';
+        updateStatusSortIndicators();
+        renderStatusPage();
+    });
+
+    statusSortByDate.addEventListener('click', () => {
+        statusSortMode = 'date';
+        updateStatusSortIndicators();
+        renderStatusPage();
+    });
+
+    statusSortByCompletion.addEventListener('click', () => {
+        statusSortMode = 'completion';
+        updateStatusSortIndicators();
+        renderStatusPage();
+    });
+
+    updateStatusSortIndicators();
 
     /* =========================================================
        頁籤四：美術組預計工作項目
