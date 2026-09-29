@@ -1262,11 +1262,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // (不去掉的話，像「888 008 積上開花」會抓到開頭的「888」而不是真正要排序的「008」，
         // 導致同一個平台底下的專案全部被當成同一個數字、排序等於沒排)。
         const stripped = group.key !== 'OTHER' ? name.replace(group.test, '') : name;
-        // 剩下的部分裡取「最後一個」數字當排序依據：大多數專案名稱只有一個數字(例如 008)，
-        // 但也有「平台代碼後面先接一個大家共用的識別碼、真正的序號在名稱最後面」的情況
-        // (例如「888_999_龍族傳奇9」「888_999_龍族傳奇10」)，取最後一個數字才會抓到 9、10 而不是誤判成共用的 999。
-        const matches = stripped.match(/\d+/g);
-        return matches && matches.length > 0 ? parseInt(matches[matches.length - 1], 10) : -1; // 完全沒有數字的(如公版GUI)排最前面
+        // 剩下的部分裡取「第一個」數字當排序依據：團隊自己排的專案序號緊接在平台代碼後面
+        // (例如「888 011 龍族傳奇2」的 011)，後面遊戲名稱裡自帶的數字(例如「龍族傳奇2」的 2)
+        // 只是遊戲名稱的一部分(續作編號)，不是要拿來排序用的，所以只抓第一個數字就好。
+        const match = stripped.match(/\d+/);
+        return match ? parseInt(match[0], 10) : -1; // 完全沒有數字的(如公版GUI)排最前面
     }
 
     function getSortedRows() {
