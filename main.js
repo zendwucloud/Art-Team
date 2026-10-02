@@ -3058,6 +3058,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 影片引擎(ffmpeg.wasm)第一次使用才載入，之後同一次瀏覽都直接沿用，不用重複下載。
     // 引擎檔案(約 30MB)已經放在同資料夾的 vendor/ 底下，不用連外部 CDN，速度跟穩定度都比較好掌握。
+    // 影片處理過程中如果出錯(例如瀏覽器記憶體不足)，引擎內部狀態可能已經不乾淨了，
+    // 保留著繼續用很容易讓「下一支」影片或「重新按一次」也跟著失敗。
+    // 因此壓縮失敗時整個引擎直接丟掉，下一次使用會自動重新載入一份乾淨的。
+    function resetFFmpegEngine() {
+        const old = ffmpegInstance;
+        ffmpegInstance = null;
+        ffmpegLoadPromise = null;
+        if (old) {
+            try { old.terminate(); } catch (e) { /* 忽略 */ }
+        }
+    }
+
     async function getFFmpeg() {
         if (ffmpegInstance) return ffmpegInstance;
         if (ffmpegLoadPromise) return ffmpegLoadPromise;
@@ -3268,7 +3280,9 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (err) {
                 console.error('影片壓縮失敗：', file.name, err);
                 const reason = (err && err.message) ? err.message : '未知錯誤';
-                card.innerHTML = `<div class="status-line">❌ ${file.name} 壓縮失敗<br>${reason}</div>`;
+                card.innerHTML = `<div class="status-line">❌ ${file.name} 壓縮失敗<br>${reason}<br><small>如果重新整理後再試一次還是一樣，麻煩把這個錯誤訊息截圖給我們看</small></div>`;
+                // 失敗時引擎狀態可能已經不乾淨，整個丟掉重來，避免接下來的影片跟著遭殃
+                resetFFmpegEngine();
             }
         }
 
